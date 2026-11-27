@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/expanse-kv-core",
+    "crates/expanse-kv-engine",
+    "crates/expanse-kv-persist",
+    "crates/expanse-kv-server",
+    "crates/expanse-kv-bench",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/orieg/expanse-kv"
+homepage = "https://github.com/orieg/expanse-kv"
+
+[workspace.dependencies]
+# The index. Consumed as published; never vendored, patched or path-linked
+# (AGENTS.md §2.1).
+expanse-trie = "0.19.0"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

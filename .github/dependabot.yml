@@ -1,0 +1,16 @@
+# One grouped pull request per ecosystem. Cargo.toml ranges stay as written;
+# the `msrv` job catches a dependency that needs a newer rustc. Action pins are
+# not updated here: a workflow edit is a ratified path (discipline.toml).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      cargo:
+        patterns: ["*"]

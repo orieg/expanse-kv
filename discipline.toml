@@ -1,0 +1,73 @@
+# discipline.toml — the diff gates run by the `discipline` CI job and by the
+# agent hooks, through orieg/discipline.
+#
+# Most gates are on at severity "error" by default, so this file states only
+# what differs. `discipline gates` prints the effective state of every gate;
+# `discipline explain <gate>` says what one checks and which directive lifts a
+# finding. docs/CI.md carries the same map.
+
+[meta]
+version = 1
+name = "expanse-kv"
+description = "Redis-protocol-compatible key-value store and cache on expanse-trie"
+
+[directives]
+# A push to main reads the merged pull request's body, so a waiver the pull
+# request carried still lifts its finding after the merge.
+sources = ["pr-body", "commits", "merged-pr-body"]
+
+[gates.agents-md]
+severity = "error"
+
+[gates.time-estimates]
+severity = "error"
+diff_only = true
+
+[gates.suppression-delta]
+severity = "error"
+
+# Every pull request references an issue (`Closes #N`, `Refs #N`) or carries
+# `no-issue: <reason>` (AGENTS.md §6). Dependabot cannot write a reference.
+[gates.issue-link]
+enabled = true
+exempt_authors = ["dependabot[bot]"]
+
+# Every published number carries its provenance tag (AGENTS.md §8.7).
+[gates.provenance-tags]
+enabled = true
+diff_only = true
+
+# An edit to the agent contract, the gate policy, the supply-chain policy, a
+# workflow or an agent hook needs the owner's ratification on an issue the pull
+# request closes (AGENTS.md §5).
+[gates.ratified-paths]
+enabled = true
+protected_paths = [
+  "AGENTS.md",
+  "CLAUDE.md",
+  "GEMINI.md",
+  "CODEOWNERS",
+  "discipline.toml",
+  "deny.toml",
+  ".github/workflows/**",
+  ".github/hooks/**",
+  ".claude/settings.json",
+  ".claude/hooks/**",
+  ".agents/hooks.json",
+]
+never_ratifiable = []
+ratifiers = ["orieg"]
+agent_logins = [
+  "github-actions[bot]",
+  "dependabot[bot]",
+  "Copilot",
+  "copilot-swe-agent[bot]",
+]
+
+# Every job is a dependency of `ci-gate`, the one required status check, and
+# every action is pinned to a full commit SHA.
+[gates.ci-integrity]
+enabled = true
+rollup_job = "ci-gate"
+workflows = [".github/workflows/ci.yml"]
+pin_actions = true

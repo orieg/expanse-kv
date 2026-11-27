@@ -1,0 +1,8 @@
+# Changes that can weaken the gates or the agent contract need the owner's review.
+/AGENTS.md            @orieg
+/discipline.toml      @orieg
+/deny.toml            @orieg
+/.github/             @orieg
+/.claude/             @orieg
+/.agents/             @orieg
+/CODEOWNERS           @orieg

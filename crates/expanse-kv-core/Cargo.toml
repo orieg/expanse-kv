@@ -1,0 +1,16 @@
+[package]
+name = "expanse-kv-core"
+description = "RESP2/RESP3 wire codec and order-preserving key codecs for expanse-kv (no_std + alloc)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = ["std"]
+std = []
+
+[lints]
+workspace = true

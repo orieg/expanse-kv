@@ -1,0 +1,34 @@
+# Supply-chain gate for the expanse-kv workspace (CI job `supply-chain`).
+#
+# expanse-kv is a network-facing server, so the dependency graph is part of its
+# attack surface. The gate is fail-closed: a new advisory, a licence outside the
+# list, an unknown registry or a git dependency is a decision, not a surprise.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+# Permissive only, and exhaustive rather than a catch-all: a licence appearing
+# in the graph for the first time is added here by a reviewed change.
+allow = [
+    "Apache-2.0",
+    "MIT",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between workspace crates carry no version requirement
+# until those crates are published.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

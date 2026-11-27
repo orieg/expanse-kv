@@ -1,0 +1,19 @@
+[package]
+name = "expanse-kv"
+description = "Multi-threaded, Redis-protocol-compatible key-value store and cache on the expanse-trie radix trie"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["redis", "resp", "key-value", "cache", "radix-trie"]
+categories = ["database-implementations", "caching"]
+
+[[bin]]
+name = "expanse-kv"
+path = "src/main.rs"
+
+[lints]
+workspace = true

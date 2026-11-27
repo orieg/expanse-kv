@@ -1,0 +1,15 @@
+[package]
+name = "expanse-kv-persist"
+description = "Append-only log and snapshot persistence for expanse-kv"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+expanse-kv-core = { path = "../expanse-kv-core" }
+
+[lints]
+workspace = true
