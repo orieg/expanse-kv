@@ -31,6 +31,31 @@ Two rules follow, and the `ci-integrity` discipline gate enforces both:
 `copilot-setup-steps.yml` is not a check. It installs `discipline` for the
 Copilot cloud agent so the hooks in `.github/hooks/` can run.
 
+## Release
+
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) publishes
+the `expanse-kv` crate to crates.io when a version tag is pushed. It
+authenticates through OIDC trusted publishing: the job trades its GitHub
+identity for a short-lived registry token, and no token is stored in the
+repository or on a workstation.
+
+| Job | What it does |
+| :--- | :--- |
+| `release-gate` | Refuses unless the tag is annotated with a forge-verified signature, matches the workspace version, sits on `main`, and its commit's `CI Gate / All Checks Passed` concluded `success` |
+| `package` | Packages and verifies each crate in `RELEASE_CRATES` without uploading |
+| `publish-crates` | Publishes each crate from the `release` environment. A version already on the registry counts as published |
+
+A pre-release tag (`vX.Y.Z-rc.N`) is gated and packaged and publishes nothing.
+A manual run is a canary: it packages and verifies, and refuses to publish.
+
+The workflow depends on two settings outside the repository's files:
+
+- a GitHub environment named `release`, restricted to `v*` tags;
+- on crates.io, a trusted publisher on each published crate naming this
+  repository, the workflow `release.yml` and the environment `release`.
+
+Creating a tag is the maintainer's action (`AGENTS.md` §5).
+
 ## Discipline gates
 
 [orieg/discipline](https://github.com/orieg/discipline) reads the diff, the
