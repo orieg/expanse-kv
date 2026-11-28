@@ -25,6 +25,10 @@ pub struct ServerConfig {
     pub fsync_policy: FsyncPolicy,
     /// Optional path for binary CRC64 snapshots (`SAVE` / `BGSAVE`).
     pub snapshot_path: Option<PathBuf>,
+    /// Optional PEM certificate chain path to enable TLS 1.3/1.2 via `rustls`.
+    pub tls_cert: Option<PathBuf>,
+    /// Optional PEM private key path paired with `tls_cert`.
+    pub tls_key: Option<PathBuf>,
     /// Interval in milliseconds between background active TTL expiry sweeps.
     pub active_expire_interval_ms: u64,
 }
@@ -40,6 +44,8 @@ impl Default for ServerConfig {
             aof_path: None,
             fsync_policy: FsyncPolicy::EverySec,
             snapshot_path: None,
+            tls_cert: None,
+            tls_key: None,
             active_expire_interval_ms: 100,
         }
     }
@@ -86,6 +92,8 @@ OPTIONS:
   --aof <PATH>              Enable Append-Only File persistence at PATH
   --fsync <POLICY>          always | everysec | no (default: everysec)
   --snapshot <PATH>         Binary CRC64 snapshot path for SAVE/BGSAVE
+  --tls-cert <PATH>         PEM certificate chain path to enable TLS
+  --tls-key <PATH>          PEM private key path (required with --tls-cert)
 ";
 
 /// Parses command-line arguments (excluding `argv[0]`).
@@ -172,11 +180,25 @@ pub fn parse_cli_args(args: &[String]) -> Result<CliAction, CliError> {
                 i += 1;
                 cfg.snapshot_path = Some(PathBuf::from(next_value(args, i, "--snapshot")?));
             }
+            "--tls-cert" => {
+                i += 1;
+                cfg.tls_cert = Some(PathBuf::from(next_value(args, i, "--tls-cert")?));
+            }
+            "--tls-key" => {
+                i += 1;
+                cfg.tls_key = Some(PathBuf::from(next_value(args, i, "--tls-key")?));
+            }
             other => {
                 return Err(CliError(format!("unknown option `{other}`\n\n{USAGE}")));
             }
         }
         i += 1;
+    }
+
+    if cfg.tls_cert.is_some() != cfg.tls_key.is_some() {
+        return Err(CliError(
+            "both --tls-cert and --tls-key must be provided together".to_string(),
+        ));
     }
 
     Ok(CliAction::Serve(cfg))

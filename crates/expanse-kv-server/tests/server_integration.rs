@@ -371,3 +371,149 @@ fn tcp_aof_restart_recovery() {
 
     std::fs::remove_file(&aof_path).unwrap();
 }
+
+#[test]
+fn tls13_handshake_and_resp_roundtrip() {
+    use rustls::RootCertStore;
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::{CertificateDer, ServerName};
+    use std::process::Command;
+    use std::sync::Arc;
+    use tokio_rustls::TlsConnector;
+
+    let tmp_dir = std::env::temp_dir().join(format!("expanse-kv-tls-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir).unwrap();
+    let ca_key = tmp_dir.join("ca.key");
+    let ca_cert = tmp_dir.join("ca.pem");
+    let cert_path = tmp_dir.join("cert.pem");
+    let key_path = tmp_dir.join("key.pem");
+    let csr_path = tmp_dir.join("server.csr");
+    let ext_path = tmp_dir.join("ext.cnf");
+
+    std::fs::write(
+        &ext_path,
+        "basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:localhost,IP:127.0.0.1\n",
+    )
+    .unwrap();
+
+    // Generate ephemeral test CA and leaf certificate via openssl (no private keys in repo).
+    let s1 = Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "ed25519",
+            "-nodes",
+            "-keyout",
+            ca_key.to_str().unwrap(),
+            "-out",
+            ca_cert.to_str().unwrap(),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=expanse-kv-test-ca",
+        ])
+        .status()
+        .expect("run openssl for CA cert");
+    assert!(s1.success(), "openssl CA generation failed");
+
+    let s2 = Command::new("openssl")
+        .args([
+            "req",
+            "-newkey",
+            "ed25519",
+            "-nodes",
+            "-keyout",
+            key_path.to_str().unwrap(),
+            "-out",
+            csr_path.to_str().unwrap(),
+            "-subj",
+            "/CN=localhost",
+        ])
+        .status()
+        .expect("run openssl for leaf CSR");
+    assert!(s2.success(), "openssl CSR generation failed");
+
+    let s3 = Command::new("openssl")
+        .args([
+            "x509",
+            "-req",
+            "-in",
+            csr_path.to_str().unwrap(),
+            "-CA",
+            ca_cert.to_str().unwrap(),
+            "-CAkey",
+            ca_key.to_str().unwrap(),
+            "-CAcreateserial",
+            "-out",
+            cert_path.to_str().unwrap(),
+            "-days",
+            "1",
+            "-extfile",
+            ext_path.to_str().unwrap(),
+        ])
+        .status()
+        .expect("run openssl to sign leaf cert");
+    assert!(s3.success(), "openssl leaf signing failed");
+
+    let rt = build_rt();
+    rt.block_on(async {
+        let cfg = ServerConfig {
+            port: 0,
+            tls_cert: Some(cert_path.clone()),
+            tls_key: Some(key_path.clone()),
+            ..ServerConfig::default()
+        };
+        let server = RunningServer::bind(&cfg).await.unwrap();
+        let addr = server.local_addr();
+        let (tx, rx) = watch::channel(false);
+        let handle = tokio::spawn(async move { server.serve(rx).await });
+
+        let mut roots = RootCertStore::empty();
+        for cert in CertificateDer::pem_file_iter(&ca_cert).unwrap() {
+            roots.add(cert.unwrap()).unwrap();
+        }
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let client_cfg = rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let connector = TlsConnector::from(Arc::new(client_cfg));
+
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        let mut tls = connector
+            .connect(ServerName::try_from("localhost").unwrap(), tcp)
+            .await
+            .unwrap();
+
+        // Confirm negotiated protocol is TLS 1.3.
+        assert_eq!(
+            tls.get_ref().1.protocol_version(),
+            Some(rustls::ProtocolVersion::TLSv1_3)
+        );
+
+        // Execute PING, SET, GET over TLS 1.3.
+        tls.write_all(&encode_cmd(&[b"PING"])).await.unwrap();
+        let mut buf = [0u8; 64];
+        let n = tls.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"+PONG\r\n");
+
+        tls.write_all(&encode_cmd(&[b"SET", b"tls:key", b"encrypted"]))
+            .await
+            .unwrap();
+        let n = tls.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"+OK\r\n");
+
+        tls.write_all(&encode_cmd(&[b"GET", b"tls:key"]))
+            .await
+            .unwrap();
+        let n = tls.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"$9\r\nencrypted\r\n");
+
+        tx.send(true).unwrap();
+        handle.await.unwrap().unwrap();
+    });
+
+    std::fs::remove_dir_all(&tmp_dir).unwrap();
+}
