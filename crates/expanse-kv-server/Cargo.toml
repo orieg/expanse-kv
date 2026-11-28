@@ -11,9 +11,19 @@ readme = "README.md"
 keywords = ["redis", "resp", "key-value", "cache", "radix-trie"]
 categories = ["database-implementations", "caching"]
 
+[lib]
+name = "expanse_kv"
+path = "src/lib.rs"
+
 [[bin]]
 name = "expanse-kv"
 path = "src/main.rs"
+
+[dependencies]
+expanse-kv-core = { version = "0.1.0", path = "../expanse-kv-core" }
+expanse-kv-engine = { version = "0.1.0", path = "../expanse-kv-engine" }
+expanse-kv-persist = { version = "0.1.0", path = "../expanse-kv-persist" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "signal"] }
 
 [lints]
 workspace = true
