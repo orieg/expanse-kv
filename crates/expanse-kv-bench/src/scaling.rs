@@ -240,11 +240,11 @@ impl ShardedMap {
         };
         let esc_start = after.map(encode_strict_successor);
 
-        for sid in start_shard..self.shards.len() {
-            let reader = self.shards[sid].inner().reader();
+        for (offset, shard) in self.shards[start_shard..].iter().enumerate() {
+            let reader = shard.inner().reader();
             let mut cursor = reader.cursor();
             cursor.set_batch_cap(count.saturating_sub(out.len()).max(1));
-            if sid == start_shard
+            if offset == 0
                 && let Some(ref succ) = esc_start
             {
                 let nfs = expanse_trie::strmap::NulFreeStr::new(succ)
