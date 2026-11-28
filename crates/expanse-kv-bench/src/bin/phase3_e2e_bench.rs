@@ -95,19 +95,26 @@ fn read_loadavg_1m() -> Option<f64> {
     None
 }
 
-fn populate(addr: &str, n_keys: u64, threads: usize, val_len: usize) -> f64 {
+fn populate(host: &str, ports: &[u16], n_keys: u64, threads: usize, val_len: usize) -> f64 {
     let val = vec![b'x'; val_len];
-    let per_thread = n_keys.div_ceil(threads as u64);
+    let n_shards = ports.len() as u64;
     let t0 = Instant::now();
     let mut handles = Vec::with_capacity(threads);
     for tid in 0..threads {
-        let start = (tid as u64) * per_thread;
-        let end = ((tid as u64 + 1) * per_thread).min(n_keys);
-        if start >= end {
+        let port = ports[tid % ports.len()];
+        let addr_owned = format!("{host}:{port}");
+        let val_owned = val.clone();
+        let (start, step, limit) = if n_shards > 1 {
+            (tid as u64, n_shards, n_keys)
+        } else {
+            let per = n_keys.div_ceil(threads as u64);
+            let s = (tid as u64) * per;
+            let e = ((tid as u64 + 1) * per).min(n_keys);
+            (s, 1, e)
+        };
+        if start >= limit {
             continue;
         }
-        let addr_owned = addr.to_string();
-        let val_owned = val.clone();
         handles.push(thread::spawn(move || {
             let mut stream = TcpStream::connect(&addr_owned).expect("connect for populate");
             stream.set_nodelay(true).expect("set_nodelay");
@@ -117,13 +124,15 @@ fn populate(addr: &str, n_keys: u64, threads: usize, val_len: usize) -> f64 {
             let mut batch = Vec::with_capacity(16 * 1024);
             let mut line = Vec::with_capacity(128);
             let mut cur = start;
-            let pipe = 64u64;
-            while cur < end {
-                let count = (end - cur).min(pipe);
+            let pipe = 64usize;
+            while cur < limit {
                 batch.clear();
-                for k in cur..cur + count {
-                    format_key(k, &mut key);
+                let mut count = 0usize;
+                while cur < limit && count < pipe {
+                    format_key(cur, &mut key);
                     append_set(&key, &val_owned, &mut batch);
+                    cur += step;
+                    count += 1;
                 }
                 stream.write_all(&batch).expect("write populate batch");
                 let mut pop_bytes = 0u64;
@@ -131,7 +140,6 @@ fn populate(addr: &str, n_keys: u64, threads: usize, val_len: usize) -> f64 {
                     pop_bytes = pop_bytes.wrapping_add(read_one_reply(&mut reader, &mut line));
                 }
                 std::hint::black_box(pop_bytes);
-                cur += count;
             }
         }));
     }
@@ -149,7 +157,8 @@ struct ReplicateResult {
 }
 
 struct BenchParams<'a> {
-    addr: &'a str,
+    host: &'a str,
+    ports: &'a [u16],
     n_keys: u64,
     threads: usize,
     pipeline: usize,
@@ -161,14 +170,22 @@ fn run_replicate(params: &BenchParams<'_>, write_pct: u64, rep_seed: u64) -> Rep
     let barrier = Arc::new(Barrier::new(params.threads));
     let val = vec![b'v'; params.val_len];
     let batches_per_thread = params.ops_per_thread / params.pipeline;
+    let n_shards = params.ports.len() as u64;
     let mut handles = Vec::with_capacity(params.threads);
 
     for tid in 0..params.threads {
-        let addr_owned = params.addr.to_string();
+        let port = params.ports[tid % params.ports.len()];
+        let addr_owned = format!("{}:{port}", params.host);
         let bar = Arc::clone(&barrier);
         let val_owned = val.clone();
         let n_keys = params.n_keys;
         let pipeline = params.pipeline;
+        let shard_idx = (tid as u64) % n_shards;
+        let shard_keys = if n_shards > 1 {
+            (n_keys - shard_idx).div_ceil(n_shards).max(1)
+        } else {
+            n_keys
+        };
         handles.push(thread::spawn(move || {
             let mut stream = TcpStream::connect(&addr_owned).expect("connect worker");
             stream.set_nodelay(true).expect("set_nodelay");
@@ -188,7 +205,11 @@ fn run_replicate(params: &BenchParams<'_>, write_pct: u64, rep_seed: u64) -> Rep
                 batch.clear();
                 for _ in 0..pipeline {
                     let r = rng.next();
-                    let id = r % n_keys;
+                    let id = if n_shards > 1 {
+                        (r % shard_keys) * n_shards + shard_idx
+                    } else {
+                        r % n_keys
+                    };
                     format_key(id, &mut key);
                     if write_pct > 0 && ((r >> 32) % 100) < write_pct {
                         append_set(&key, &val_owned, &mut batch);
@@ -233,7 +254,7 @@ fn run_replicate(params: &BenchParams<'_>, write_pct: u64, rep_seed: u64) -> Rep
 fn main() {
     let args: Vec<String> = env::args().collect();
     let mut host = "127.0.0.1".to_string();
-    let mut port: u16 = 6379;
+    let mut ports: Vec<u16> = vec![6379];
     let mut n_keys: u64 = 1_000_000;
     let mut threads: usize = 16;
     let mut pipeline: usize = 16;
@@ -251,7 +272,15 @@ fn main() {
             }
             "--port" => {
                 i += 1;
-                port = args[i].parse().expect("invalid --port");
+                ports = vec![args[i].parse().expect("invalid --port")];
+            }
+            "--ports" => {
+                i += 1;
+                ports = args[i]
+                    .split(',')
+                    .map(|p| p.parse::<u16>().expect("invalid port in --ports"))
+                    .collect();
+                assert!(!ports.is_empty(), "--ports must not be empty");
             }
             "--keys" => {
                 i += 1;
@@ -285,18 +314,18 @@ fn main() {
         i += 1;
     }
 
-    let addr = format!("{host}:{port}");
     let load_before = read_loadavg_1m();
     let pop_secs = if skip_populate {
         0.0
     } else {
-        populate(&addr, n_keys, threads, val_len)
+        populate(&host, &ports, n_keys, threads, val_len)
     };
     let load_after_pop = read_loadavg_1m();
 
     let mixes = [("100_read", 0u64), ("95_5_rw", 5u64)];
     println!("{{");
     println!("  \"n_keys\": {n_keys},");
+    println!("  \"shards\": {},", ports.len());
     println!("  \"threads\": {threads},");
     println!("  \"pipeline\": {pipeline},");
     println!("  \"ops_per_thread\": {ops_per_thread},");
@@ -320,7 +349,8 @@ fn main() {
         let mut cs_total = 0u64;
 
         let params = BenchParams {
-            addr: &addr,
+            host: &host,
+            ports: &ports,
             n_keys,
             threads,
             pipeline,
