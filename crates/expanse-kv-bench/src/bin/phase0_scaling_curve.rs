@@ -317,7 +317,7 @@ fn render_markdown(ctx: &ReportContext<'_>) -> Result<String, fmt::Error> {
     writeln!(md, "- **Provenance:** `({prov_tag})`")?;
     writeln!(
         md,
-        "- **Host load (1-min avg):** start `{:.2}`, end `{:.2}` (limit `{:.2}`) `({prov_tag})`",
+        "- **Host load (`loadavg[0]`):** start `{:.2}`, end `{:.2}` (limit `{:.2}`) `({prov_tag})`",
         ctx.load_start, ctx.load_end, ctx.load_limit
     )?;
     writeln!(
