@@ -5,7 +5,7 @@
 //!
 //! - the order-preserving IEEE-754 `f64` score codec ([`score`]);
 //! - the composite key codecs and type-prefix registry ([`key`]);
-//! - the RESP2 and RESP3 streaming parser and encoder (Phase 1).
+//! - the zero-copy RESP2 and RESP3 streaming parser and encoder ([`resp`]).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
@@ -13,4 +13,5 @@
 extern crate alloc;
 
 pub mod key;
+pub mod resp;
 pub mod score;
