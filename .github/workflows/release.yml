@@ -30,7 +30,7 @@ env:
   CARGO_TERM_COLOR: always
   # The crates this workflow publishes, in dependency order. A crate marked
   # `publish = false` is added here in the change that makes it publishable.
-  RELEASE_CRATES: "expanse-kv"
+  RELEASE_CRATES: "expanse-kv-core expanse-kv-engine expanse-kv-persist expanse-kv"
 
 jobs:
   release-gate:
@@ -127,9 +127,14 @@ jobs:
       - name: Package and verify
         run: |
           set -euo pipefail
+          # One invocation for the whole set: cargo resolves each crate
+          # against the others being packaged. Crate by crate, a dependant
+          # would fail on a dependency version not yet on the registry.
+          args=()
           for crate in ${RELEASE_CRATES}; do
-            cargo publish --dry-run --locked -p "${crate}"
+            args+=(-p "${crate}")
           done
+          cargo publish --dry-run --locked "${args[@]}"
 
   publish-crates:
     name: Publish to crates.io

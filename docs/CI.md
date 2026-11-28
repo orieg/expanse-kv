@@ -34,7 +34,8 @@ Copilot cloud agent so the hooks in `.github/hooks/` can run.
 ## Release
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml) publishes
-the `expanse-kv` crate to crates.io when a version tag is pushed. It
+`expanse-kv-core`, `expanse-kv-engine`, `expanse-kv-persist` and `expanse-kv` to
+crates.io, in that dependency order, when a version tag is pushed. It
 authenticates through OIDC trusted publishing: the job trades its GitHub
 identity for a short-lived registry token, and no token is stored in the
 repository or on a workstation.
@@ -42,7 +43,7 @@ repository or on a workstation.
 | Job | What it does |
 | :--- | :--- |
 | `release-gate` | Refuses unless the tag is annotated with a forge-verified signature, matches the workspace version, sits on `main`, and its commit's `CI Gate / All Checks Passed` concluded `success` |
-| `package` | Packages and verifies each crate in `RELEASE_CRATES` without uploading |
+| `package` | Packages and verifies the crates in `RELEASE_CRATES` together, without uploading |
 | `publish-crates` | Publishes each crate from the `release` environment. A version already on the registry counts as published |
 
 A pre-release tag (`vX.Y.Z-rc.N`) is gated and packaged and publishes nothing.
