@@ -20,9 +20,9 @@ name = "expanse-kv"
 path = "src/main.rs"
 
 [dependencies]
-expanse-kv-core = { path = "../expanse-kv-core" }
-expanse-kv-engine = { path = "../expanse-kv-engine" }
-expanse-kv-persist = { path = "../expanse-kv-persist" }
+expanse-kv-core = { version = "0.1.0", path = "../expanse-kv-core" }
+expanse-kv-engine = { version = "0.1.0", path = "../expanse-kv-engine" }
+expanse-kv-persist = { version = "0.1.0", path = "../expanse-kv-persist" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "signal"] }
 
 [lints]
