@@ -1,0 +1,22 @@
+{
+  "gate": "phase4_persist",
+  "hardware": "Apple Silicon 8-core ARM64 (16 GiB RAM, macOS)",
+  "commands_replayed": 1000000,
+  "aof_bytes": 54440104,
+  "write_ms": 4659.60,
+  "replay_ms": 532.98,
+  "state_crc64": "0x450769ffb58893bb",
+  "checksum_match": true,
+  "sigkill_fsync_always_committed": 200,
+  "sigkill_cuts_tested": 73,
+  "sigkill_losses": 0,
+  "snapshot_records": 17757,
+  "snapshot_bytes": 1961192,
+  "snapshot_save_ms": 82.46,
+  "snapshot_crc64": "0xaa367e64d9165f8f",
+  "snapshot_corruption_flips_tested": 64,
+  "snapshot_corruption_accepted": 0,
+  "aof_rewrite_commands": 85239,
+  "aof_rewrite_bytes": 4475314,
+  "verdict": "PASS"
+}
