@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "expanse-kv"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "expanse-kv-core",
  "expanse-kv-engine",
@@ -55,18 +55,18 @@ dependencies = [
 
 [[package]]
 name = "expanse-kv-bench"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "expanse-trie",
 ]
 
 [[package]]
 name = "expanse-kv-core"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "expanse-kv-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "expanse-kv-core",
  "expanse-trie",
@@ -74,7 +74,7 @@ dependencies = [
 
 [[package]]
 name = "expanse-kv-persist"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "expanse-kv-core",
 ]
