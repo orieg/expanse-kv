@@ -1,0 +1,13 @@
+{
+  "provenance": "measured: AMD Ryzen 9 9955HX 16-Core Processor (32T, Linux 6.8.0-139-generic x86_64), b8847c2",
+  "load_start": 0.100,
+  "load_end": 0.100,
+  "load_limit": 16.00,
+  "fuzz_inputs": 10000000,
+  "fuzz_panics": 0,
+  "fuzz_frame_complete": 331895,
+  "fuzz_cmd_complete": 3557786,
+  "mixed_get_set_gbps": {"mean": 6.7696, "ci_low": 6.7664, "ci_high": 6.7725},
+  "get_only_gbps": {"mean": 5.6107, "ci_low": 5.6083, "ci_high": 5.6124},
+  "set_only_gbps": {"mean": 7.6104, "ci_low": 7.6049, "ci_high": 7.6154}
+}
