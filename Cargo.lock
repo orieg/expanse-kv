@@ -34,6 +34,9 @@ version = "0.0.0"
 [[package]]
 name = "expanse-kv-bench"
 version = "0.0.0"
+dependencies = [
+ "expanse-trie",
+]
 
 [[package]]
 name = "expanse-kv-core"

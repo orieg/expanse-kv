@@ -8,5 +8,11 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+occ-stats = ["expanse-trie/occ-stats"]
+
+[dependencies]
+expanse-trie = { workspace = true }
+
 [lints]
 workspace = true
