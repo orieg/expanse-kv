@@ -1,0 +1,193 @@
+# Release: publishes the `expanse-kv` crate to crates.io from a signed version
+# tag, through OIDC trusted publishing. No registry token is stored anywhere.
+# docs/CI.md (Release) describes the one-time setup and how to cut a release.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Canary: runs the gate and packages the crate without publishing. Run it
+  # before tagging a release.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: package and verify, publish nothing'
+        type: boolean
+        default: true
+
+# Minimal default; each job elevates only what it needs.
+permissions:
+  contents: read
+
+# One run per ref, never cancelled: a tag deleted and pushed again must not
+# have two runs racing to the registry.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # The crates this workflow publishes, in dependency order. A crate marked
+  # `publish = false` is added here in the change that makes it publishable.
+  RELEASE_CRATES: "expanse-kv"
+
+jobs:
+  release-gate:
+    name: Release Gate / Signed Tag, Version, CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read # the commit's `CI Gate / All Checks Passed` check run
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Refuse a dispatch that would publish
+        # A release is a pushed, signed tag. The tag checks below run on a tag
+        # push only, so a manual run with `dry_run` unticked would skip them.
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
+        run: |
+          echo "::error::A release is published by pushing a signed tag, not by a manual run. Re-run with dry_run ticked."
+          exit 1
+
+      - name: Tag is annotated, signed and verified
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          obj="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")"
+          type="$(jq -r '.object.type' <<<"${obj}")"
+          if [ "${type}" != "tag" ]; then
+            echo "::error::${GITHUB_REF_NAME} is a lightweight tag; a release tag is annotated and signed"
+            exit 1
+          fi
+          sha="$(jq -r '.object.sha' <<<"${obj}")"
+          verified="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.verification.verified')"
+          if [ "${verified}" != "true" ]; then
+            echo "::error::the signature on ${GITHUB_REF_NAME} is not verified by the forge"
+            exit 1
+          fi
+          echo "${GITHUB_REF_NAME}: annotated, signature verified"
+
+      - name: Tag matches the workspace version
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          v="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          [ -n "${v}" ] || { echo "::error::Cargo.toml declares no workspace version"; exit 1; }
+          if [ "v${v}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the workspace version ${v}"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} matches workspace version ${v}"
+
+      - name: Tagged commit is on main
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::${GITHUB_SHA} is not on main; a release is cut from main"
+            exit 1
+          fi
+          echo "${GITHUB_SHA} is on main"
+
+      - name: The commit passed CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Exactly `success`: a missing, pending or failed gate all refuse the
+          # release (AGENTS.md §8.1).
+          conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            --paginate --jq '.check_runs[] | select(.name == "CI Gate / All Checks Passed") | .conclusion' | sort -u | tr '\n' ' ')"
+          if [ "${conclusion}" != "success " ]; then
+            echo "::error::CI Gate / All Checks Passed on ${GITHUB_SHA} is '${conclusion:-absent}', not success"
+            exit 1
+          fi
+          echo "CI Gate / All Checks Passed: success on ${GITHUB_SHA}"
+
+  package:
+    name: Package and Verify (no upload)
+    needs: [release-gate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - name: Package and verify
+        run: |
+          set -euo pipefail
+          for crate in ${RELEASE_CRATES}; do
+            cargo publish --dry-run --locked -p "${crate}"
+          done
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: [release-gate, package]
+    # A tag push only, and never a pre-release tag (vX.Y.Z-rc.N), which is
+    # gated and packaged and stops there. A manual canary never reaches the
+    # `release` environment, which admits release tags only.
+    if: ${{ github.event_name == 'push' && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # crates.io OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+
+      # Exchanges this job's OIDC identity for a short-lived crates.io token,
+      # which the action's post step revokes. Each crate lists this repository,
+      # `release.yml` and the `release` environment as a trusted publisher on
+      # crates.io.
+      - name: Authenticate to crates.io (OIDC trusted publishing)
+        id: crates-auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+
+      - name: Publish crates (idempotent on already-published versions)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
+        run: |
+          set -uo pipefail
+          publish_crate() {
+            crate="$1"
+            attempt=0
+            max=3
+            while :; do
+              attempt=$((attempt + 1))
+              echo "Publishing ${crate} (attempt ${attempt}/${max})..."
+              if cargo publish --locked -p "${crate}" 2>&1 | tee /tmp/publish.log; then
+                echo "Published ${crate}."
+                return 0
+              fi
+              if grep -qiE 'already (exists|uploaded)|is already uploaded|crate version .* is already' /tmp/publish.log; then
+                echo "${crate} version already on crates.io; treating as success (idempotent)."
+                return 0
+              fi
+              if [ "${attempt}" -ge "${max}" ]; then
+                echo "::error::cargo publish failed for ${crate} after ${max} attempts"
+                return 1
+              fi
+              echo "Retrying ${crate} after the registry index catches up..."
+              sleep 20
+            done
+          }
+          for crate in ${RELEASE_CRATES}; do
+            publish_crate "${crate}" || exit 1
+          done

@@ -23,7 +23,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
 step "discipline"
 if command -v discipline >/dev/null 2>&1; then
-  discipline diff
+  # Committed changes against main, judged by main's policy as CI judges
+  # them. Commit first: uncommitted edits are not part of this check.
+  discipline check --base origin/main --policy-from base
 else
   # Not a pass: CI runs the same gates and will report what this step did not.
   echo "NOT RUN: discipline is not on PATH (https://github.com/orieg/discipline)" >&2
