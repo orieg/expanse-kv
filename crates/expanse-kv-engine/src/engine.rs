@@ -238,8 +238,8 @@ impl Engine {
     /// Removes all keys and resets memory accounting (`FLUSHDB`).
     pub fn flushdb(&self) {
         let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
-        let _ = self.data.clear();
-        let _ = self.ttl.clear();
+        self.data.clear();
+        self.ttl.clear();
         self.bitmaps.clear();
         self.slab.clear();
         self.key_count.store(0, Ordering::Relaxed);
@@ -278,7 +278,7 @@ impl Engine {
         if let Some(exp) = entry.expiry_ms {
             let mut tbuf = Vec::new();
             encode_ttl_key(exp, key, &mut tbuf);
-            let _ = self.ttl.remove(&tbuf);
+            self.ttl.remove(&tbuf);
         }
         match entry.payload {
             SlotPayload::Bytes(_) => {}
@@ -286,20 +286,20 @@ impl Engine {
                 let mut pbuf = Vec::new();
                 encode_hash_prefix(key, &mut pbuf);
                 for (hk, fhandle) in collect_prefix(&self.data, &pbuf) {
-                    let _ = self.data.remove(&hk);
-                    let _ = self.slab.remove(fhandle);
+                    self.data.remove(&hk);
+                    self.slab.remove(fhandle);
                 }
             }
             SlotPayload::ZSetHeader { .. } => {
                 let mut sp = Vec::new();
                 encode_zset_score_prefix(key, &mut sp);
                 for (zk, _) in collect_prefix(&self.data, &sp) {
-                    let _ = self.data.remove(&zk);
+                    self.data.remove(&zk);
                 }
                 let mut mp = Vec::new();
                 encode_zset_member_prefix(key, &mut mp);
                 for (zk, _) in collect_prefix(&self.data, &mp) {
-                    let _ = self.data.remove(&zk);
+                    self.data.remove(&zk);
                 }
             }
             SlotPayload::BitmapHeader { id, .. } => {
@@ -310,7 +310,7 @@ impl Engine {
                     if bit_key >= hi {
                         break;
                     }
-                    let _ = self.bitmaps.remove(bit_key);
+                    self.bitmaps.remove(bit_key);
                     cur = bit_key
                         .checked_add(1)
                         .and_then(|next| self.bitmaps.reader().next_at_or_after(next));
@@ -365,7 +365,7 @@ impl Engine {
                 if exp_ms > now {
                     return expired_count;
                 }
-                let _ = self.ttl.remove(&tk);
+                self.ttl.remove(&tk);
                 // Re-check current expiry in slab (key might have been updated with a later TTL).
                 let mut kbuf = Vec::new();
                 encode_string_key(key, &mut kbuf);
@@ -406,9 +406,9 @@ impl Engine {
                     let Some((tk, _)) = batch.into_iter().next() else {
                         return Err(EngineError::Oom);
                     };
-                    let _ = self.ttl.remove(&tk);
+                    self.ttl.remove(&tk);
                     if let Ok((_, key)) = decode_ttl_key(&tk) {
-                        let _ = self.delete_key_locked(key);
+                        self.delete_key_locked(key);
                     }
                 }
                 if self.mem_used() <= limit {
@@ -442,7 +442,7 @@ impl Engine {
                         }
                     }
                     if let Some((vkey, _)) = victim {
-                        let _ = self.delete_key_locked(&vkey);
+                        self.delete_key_locked(&vkey);
                     } else {
                         return Err(EngineError::Oom);
                     }
@@ -476,7 +476,7 @@ impl Engine {
         };
         if self.is_expired(&entry) {
             let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
-            let _ = self.expire_if_needed_locked(key);
+            self.expire_if_needed_locked(key);
             return Ok(None);
         }
         match entry.payload {
@@ -503,7 +503,7 @@ impl Engine {
             return Err(EngineError::ConflictingOptions);
         }
         let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
-        let _ = self.expire_if_needed_locked(key);
+        self.expire_if_needed_locked(key);
 
         let mut kbuf = Vec::new();
         encode_string_key(key, &mut kbuf);
@@ -540,7 +540,7 @@ impl Engine {
 
         // If replacing an existing key of another type (Hash/ZSet/Bitmap), clean up its sub-entries.
         if existing_handle.is_some() {
-            let _ = self.delete_key_locked(key);
+            self.delete_key_locked(key);
         }
 
         let entry = SlotEntry {
@@ -549,13 +549,13 @@ impl Engine {
             payload: SlotPayload::Bytes(value.to_vec()),
         };
         let handle = self.slab.insert(entry);
-        let _ = self.data.insert(&kbuf, handle);
+        self.data.insert(&kbuf, handle);
         self.key_count.fetch_add(1, Ordering::Relaxed);
 
         if let Some(exp) = effective_expiry {
             let mut tbuf = Vec::new();
             encode_ttl_key(exp, key, &mut tbuf);
-            let _ = self.ttl.insert(&tbuf, 1);
+            self.ttl.insert(&tbuf, 1);
         }
         Ok((true, prev_val))
     }
@@ -575,7 +575,7 @@ impl Engine {
     /// Returns [`EngineError::Oom`] if memory budget is exceeded.
     pub fn mset(&self, pairs: &[(&[u8], &[u8])]) -> Result<(), EngineError> {
         for &(k, v) in pairs {
-            let _ = self.set(k, v, SetOptions::default())?;
+            self.set(k, v, SetOptions::default())?;
         }
         Ok(())
     }
@@ -588,7 +588,7 @@ impl Engine {
     /// [`EngineError::Overflow`], or [`EngineError::Oom`].
     pub fn incr_by(&self, key: &[u8], delta: i64) -> Result<i64, EngineError> {
         let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
-        let _ = self.expire_if_needed_locked(key);
+        self.expire_if_needed_locked(key);
 
         let mut kbuf = Vec::new();
         encode_string_key(key, &mut kbuf);
@@ -613,7 +613,7 @@ impl Engine {
 
         let next_bytes = next.to_string().into_bytes();
         if let Some(handle) = self.data.reader().get(&kbuf) {
-            let _ = self.slab.update_entry(handle, |e| {
+            self.slab.update_entry(handle, |e| {
                 e.lru24 = self.lru24_now();
                 e.payload = SlotPayload::Bytes(next_bytes);
             });
@@ -624,7 +624,7 @@ impl Engine {
                 payload: SlotPayload::Bytes(next_bytes),
             };
             let handle = self.slab.insert(entry);
-            let _ = self.data.insert(&kbuf, handle);
+            self.data.insert(&kbuf, handle);
             self.key_count.fetch_add(1, Ordering::Relaxed);
         }
         Ok(next)
@@ -682,7 +682,7 @@ impl Engine {
             return false;
         };
         if expiry_ms <= self.now_ms() {
-            let _ = self.delete_key_locked(key);
+            self.delete_key_locked(key);
             return true;
         }
         let old_exp = self
@@ -696,11 +696,11 @@ impl Engine {
         if let Some(prev) = old_exp {
             let mut old_tbuf = Vec::new();
             encode_ttl_key(prev, key, &mut old_tbuf);
-            let _ = self.ttl.remove(&old_tbuf);
+            self.ttl.remove(&old_tbuf);
         }
         let mut new_tbuf = Vec::new();
         encode_ttl_key(expiry_ms, key, &mut new_tbuf);
-        let _ = self.ttl.insert(&new_tbuf, 1);
+        self.ttl.insert(&new_tbuf, 1);
         true
     }
 
@@ -746,7 +746,7 @@ impl Engine {
         if let Some(prev) = old_exp {
             let mut tbuf = Vec::new();
             encode_ttl_key(prev, key, &mut tbuf);
-            let _ = self.ttl.remove(&tbuf);
+            self.ttl.remove(&tbuf);
             true
         } else {
             false
@@ -809,7 +809,7 @@ impl Engine {
     /// Returns [`EngineError::WrongType`] or [`EngineError::Oom`].
     pub fn hset(&self, key: &[u8], fields: &[(&[u8], &[u8])]) -> Result<u64, EngineError> {
         let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
-        let _ = self.expire_if_needed_locked(key);
+        self.expire_if_needed_locked(key);
         self.enforce_memory_limit_locked()?;
 
         let mut kbuf = Vec::new();
@@ -831,7 +831,7 @@ impl Engine {
                     expiry_ms: None,
                     payload: SlotPayload::HashHeader { len: 0 },
                 });
-                let _ = self.data.insert(&kbuf, h);
+                self.data.insert(&kbuf, h);
                 self.key_count.fetch_add(1, Ordering::Relaxed);
                 h
             }
@@ -847,13 +847,13 @@ impl Engine {
                 payload: SlotPayload::Bytes(val.to_vec()),
             });
             if let Some(old_handle) = self.data.insert(&fbuf, new_handle) {
-                let _ = self.slab.remove(old_handle);
+                self.slab.remove(old_handle);
             } else {
                 added += 1;
             }
         }
         if added > 0 {
-            let _ = self.slab.update_entry(header_handle, |e| {
+            self.slab.update_entry(header_handle, |e| {
                 if let SlotPayload::HashHeader { len } = &mut e.payload {
                     *len += added;
                 }
@@ -914,7 +914,7 @@ impl Engine {
         for &field in fields {
             encode_hash_field_key(key, field, &mut fbuf);
             if let Some(old_handle) = self.data.remove(&fbuf) {
-                let _ = self.slab.remove(old_handle);
+                self.slab.remove(old_handle);
                 removed += 1;
             }
         }
@@ -931,7 +931,7 @@ impl Engine {
                 })
                 .unwrap_or(0);
             if remaining == 0 {
-                let _ = self.delete_key_locked(key);
+                self.delete_key_locked(key);
             }
         }
         Ok(removed)
@@ -1029,7 +1029,7 @@ impl Engine {
             }
         }
         let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
-        let _ = self.expire_if_needed_locked(key);
+        self.expire_if_needed_locked(key);
         self.enforce_memory_limit_locked()?;
 
         let mut kbuf = Vec::new();
@@ -1051,7 +1051,7 @@ impl Engine {
                     expiry_ms: None,
                     payload: SlotPayload::ZSetHeader { len: 0 },
                 });
-                let _ = self.data.insert(&kbuf, h);
+                self.data.insert(&kbuf, h);
                 self.key_count.fetch_add(1, Ordering::Relaxed);
                 h
             }
@@ -1068,17 +1068,17 @@ impl Engine {
                 if old_score.to_bits() != score.to_bits() {
                     encode_zset_score_key(key, old_score, member, &mut sbuf)
                         .map_err(|_| EngineError::InvalidScore)?;
-                    let _ = self.data.remove(&sbuf);
+                    self.data.remove(&sbuf);
                 }
             } else {
                 added += 1;
             }
             encode_zset_score_key(key, score, member, &mut sbuf)
                 .map_err(|_| EngineError::InvalidScore)?;
-            let _ = self.data.insert(&sbuf, 1);
+            self.data.insert(&sbuf, 1);
         }
         if added > 0 {
-            let _ = self.slab.update_entry(header_handle, |e| {
+            self.slab.update_entry(header_handle, |e| {
                 if let SlotPayload::ZSetHeader { len } = &mut e.payload {
                     *len += added;
                 }
@@ -1159,7 +1159,7 @@ impl Engine {
             if let Some(old_bits) = self.data.remove(&mbuf) {
                 let old_score = f64::from_bits(old_bits);
                 if encode_zset_score_key(key, old_score, member, &mut sbuf).is_ok() {
-                    let _ = self.data.remove(&sbuf);
+                    self.data.remove(&sbuf);
                 }
                 removed += 1;
             }
@@ -1177,7 +1177,7 @@ impl Engine {
                 })
                 .unwrap_or(0);
             if remaining == 0 {
-                let _ = self.delete_key_locked(key);
+                self.delete_key_locked(key);
             }
         }
         Ok(removed)
@@ -1342,7 +1342,7 @@ impl Engine {
     pub fn setbit(&self, key: &[u8], offset: u64, value: bool) -> Result<u8, EngineError> {
         let off32 = u32::try_from(offset).map_err(|_| EngineError::BitOffsetOutOfRange)?;
         let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
-        let _ = self.expire_if_needed_locked(key);
+        self.expire_if_needed_locked(key);
         self.enforce_memory_limit_locked()?;
 
         let mut kbuf = Vec::new();
@@ -1366,7 +1366,7 @@ impl Engine {
                     expiry_ms: None,
                     payload: SlotPayload::BitmapHeader { id, bit_count: 0 },
                 });
-                let _ = self.data.insert(&kbuf, h);
+                self.data.insert(&kbuf, h);
                 self.key_count.fetch_add(1, Ordering::Relaxed);
                 (h, id)
             }
@@ -1376,7 +1376,7 @@ impl Engine {
         let prev = if value {
             let inserted = self.bitmaps.insert(packed);
             if inserted {
-                let _ = self.slab.update_entry(header_handle, |e| {
+                self.slab.update_entry(header_handle, |e| {
                     if let SlotPayload::BitmapHeader { bit_count, .. } = &mut e.payload {
                         *bit_count += 1;
                     }
@@ -1388,7 +1388,7 @@ impl Engine {
         } else {
             let removed = self.bitmaps.remove(packed);
             if removed {
-                let _ = self.slab.update_entry(header_handle, |e| {
+                self.slab.update_entry(header_handle, |e| {
                     if let SlotPayload::BitmapHeader { bit_count, .. } = &mut e.payload {
                         *bit_count = bit_count.saturating_sub(1);
                     }
