@@ -1,0 +1,18 @@
+{
+  "provenance": "measured: AMD Ryzen 9 9955HX 16-Core Processor (32T, Linux 6.8.0-139-generic x86_64), da1efde",
+  "load_start": 0.410,
+  "load_end": 0.500,
+  "comparators": {"valkey_8x": "UNRUN", "dragonfly": "UNRUN"},
+  "reclaim_verdict": "PASS",
+  "reclaim_sweep": [
+    {"mutations": 100000, "live_bytes": 799024, "trie_bytes": 159024, "grace_bytes": 0, "free_bytes": 1970, "garbage_pct": 0.000000},
+    {"mutations": 1000000, "live_bytes": 799024, "trie_bytes": 159024, "grace_bytes": 0, "free_bytes": 1970, "garbage_pct": 0.000000},
+    {"mutations": 10000000, "live_bytes": 799024, "trie_bytes": 159024, "grace_bytes": 0, "free_bytes": 1970, "garbage_pct": 0.000000}
+  ],
+  "memory_envelopes": [
+    {"shape": "prefix_strings", "min_trie_bpk": 15.874, "n_min_trie": 2000000, "max_trie_bpk": 16.224, "n_max_trie": 1000, "min_total_bpk": 79.874, "n_min_total": 2000000, "max_total_bpk": 80.224, "n_max_total": 1000, "samples": 11},
+    {"shape": "uniform_strings", "min_trie_bpk": 47.114, "n_min_trie": 1000000, "max_trie_bpk": 55.486, "n_max_trie": 10000, "min_total_bpk": 111.114, "n_min_total": 1000000, "max_total_bpk": 119.486, "n_max_total": 10000, "samples": 11},
+    {"shape": "hash_fields", "min_trie_bpk": 19.047, "n_min_trie": 2000000, "max_trie_bpk": 19.280, "n_max_trie": 1000, "min_total_bpk": 83.527, "n_min_total": 2000000, "max_total_bpk": 83.760, "n_max_total": 1000, "samples": 11},
+    {"shape": "zset_members", "min_trie_bpk": 69.840, "n_min_trie": 1000, "max_trie_bpk": 71.498, "n_max_trie": 10000, "min_total_bpk": 70.320, "n_min_total": 1000, "max_total_bpk": 71.978, "n_max_total": 10000, "samples": 11}
+  ]
+}
