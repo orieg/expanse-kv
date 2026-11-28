@@ -1,0 +1,83 @@
+{
+  "gate": "phase3_e2e_bench",
+  "hardware": "AMD Ryzen 9 9955HX 16-Core Processor (16C/32T, 91 GiB RAM, Linux 6.8.0-139-generic x86_64)",
+  "loadavg_pre": 0.42,
+  "loadavg_post": 3.30,
+  "comparators": {
+    "valkey_8x_16shard": { "status": "UNRUN", "reason": "valkey-server not installed on benchmark host (AGENTS.md §8.9)" },
+    "dragonfly_16core": { "status": "UNRUN", "reason": "dragonfly not installed on benchmark host (AGENTS.md §8.9)" }
+  },
+  "expanse_kv": {
+    "n_1000000": {
+      "n_keys": 1000000,
+      "threads": 16,
+      "pipeline": 16,
+      "ops_per_thread": 100000,
+      "replicates": 5,
+      "value_bytes": 64,
+      "populate_secs": 1.534,
+      "loadavg_before": 0.64,
+      "loadavg_after_populate": 0.64,
+      "workloads": {
+        "100_read": {
+          "qps_mean": 1610627.3,
+          "qps_ci95_lo": 1537916.1,
+          "qps_ci95_hi": 1667234.3,
+          "batch_p50_us_mean": 158.28,
+          "batch_p99_us_mean": 252.90,
+          "batch_p99_us_ci95_lo": 250.56,
+          "batch_p99_us_ci95_hi": 255.84,
+          "loadavg_after": 1.79,
+          "checksum": 512000000
+        },
+        "95_5_rw": {
+          "qps_mean": 1751533.1,
+          "qps_ci95_lo": 1660304.6,
+          "qps_ci95_hi": 1893417.3,
+          "batch_p50_us_mean": 127.60,
+          "batch_p99_us_mean": 412.56,
+          "batch_p99_us_ci95_lo": 396.92,
+          "batch_p99_us_ci95_hi": 422.65,
+          "loadavg_after": 2.37,
+          "checksum": 488375102
+        }
+      }
+    },
+    "n_5000000": {
+      "n_keys": 5000000,
+      "threads": 16,
+      "pipeline": 16,
+      "ops_per_thread": 100000,
+      "replicates": 5,
+      "value_bytes": 64,
+      "populate_secs": 6.715,
+      "loadavg_before": 2.37,
+      "loadavg_after_populate": 2.18,
+      "workloads": {
+        "100_read": {
+          "qps_mean": 1560266.2,
+          "qps_ci95_lo": 1513790.4,
+          "qps_ci95_hi": 1625314.8,
+          "batch_p50_us_mean": 161.87,
+          "batch_p99_us_mean": 255.32,
+          "batch_p99_us_ci95_lo": 251.31,
+          "batch_p99_us_ci95_hi": 257.46,
+          "loadavg_after": 2.81,
+          "checksum": 512000000
+        },
+        "95_5_rw": {
+          "qps_mean": 1593868.4,
+          "qps_ci95_lo": 1524940.5,
+          "qps_ci95_hi": 1675727.5,
+          "batch_p50_us_mean": 142.31,
+          "batch_p99_us_mean": 431.35,
+          "batch_p99_us_ci95_lo": 421.93,
+          "batch_p99_us_ci95_hi": 438.26,
+          "loadavg_after": 3.30,
+          "checksum": 488375038
+        }
+      }
+    }
+  },
+  "comparative_gate_verdict": "UNRUN"
+}
