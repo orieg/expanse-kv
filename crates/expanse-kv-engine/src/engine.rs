@@ -9,7 +9,10 @@ use expanse_kv_core::key::{
     encode_zset_member_key, encode_zset_member_prefix, encode_zset_score_bound,
     encode_zset_score_key, encode_zset_score_prefix,
 };
-use expanse_trie::sync::{SyncExpanseOrderedBytesMap, SyncExpanseSet};
+use expanse_trie::sync::{OrderedBytesReader, SyncExpanseOrderedBytesMap, SyncExpanseSet};
+
+/// Reusable optimistic reader handle for [`Engine`].
+pub type EngineReader<'a> = OrderedBytesReader<'a>;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -221,6 +224,16 @@ impl Engine {
             + self.ttl.mem_used()
             + self.bitmaps.mem_used()
             + self.slab.live_bytes()
+    }
+
+    /// Returns a reusable optimistic reader handle for the backing data trie.
+    ///
+    /// Reusing a reader across a pipelined batch or connection avoids per-op
+    /// reader-registry lock contention while holding zero epoch pins when idle
+    /// (`AGENTS.md` §2.5).
+    #[must_use]
+    pub fn reader(&self) -> OrderedBytesReader<'_> {
+        self.data.reader()
     }
 
     /// Returns a reference to the backing ordered data trie (for Phase 2 diagnostics).
@@ -466,22 +479,61 @@ impl Engine {
     ///
     /// Returns [`EngineError::WrongType`] if `key` holds a non-string type.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, EngineError> {
-        let mut kbuf = Vec::new();
-        encode_string_key(key, &mut kbuf);
-        let Some(handle) = self.data.reader().get(&kbuf) else {
-            return Ok(None);
+        let reader = self.data.reader();
+        self.get_with_reader(&reader, key, |v| v.to_vec())
+    }
+
+    /// Zero-allocation `GET key` using a caller-reused [`OrderedBytesReader`].
+    ///
+    /// Calls `f` with a borrowed slice of the string value directly inside the
+    /// slab shard read guard, avoiding per-op key and value heap allocations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::WrongType`] if `key` holds a non-string type.
+    pub fn get_with_reader<R>(
+        &self,
+        reader: &OrderedBytesReader<'_>,
+        key: &[u8],
+        f: impl FnOnce(&[u8]) -> R,
+    ) -> Result<Option<R>, EngineError> {
+        let handle = if key.len() < 255 {
+            let mut stack_buf = [0u8; 256];
+            stack_buf[0] = PREFIX_STRING;
+            stack_buf[1..=key.len()].copy_from_slice(key);
+            match reader.get(&stack_buf[..=key.len()]) {
+                Some(h) => h,
+                None => return Ok(None),
+            }
+        } else {
+            let mut kbuf = Vec::with_capacity(key.len() + 1);
+            encode_string_key(key, &mut kbuf);
+            match reader.get(&kbuf) {
+                Some(h) => h,
+                None => return Ok(None),
+            }
         };
-        let Some(entry) = self.slab.get(handle) else {
-            return Ok(None);
-        };
-        if self.is_expired(&entry) {
+
+        let mut expired = false;
+        let out = self.slab.with_entry(handle, |entry| {
+            if self.is_expired(entry) {
+                expired = true;
+                return Ok(None);
+            }
+            match &entry.payload {
+                SlotPayload::Bytes(v) => Ok(Some(f(v))),
+                _ => Err(EngineError::WrongType),
+            }
+        });
+
+        if expired {
             let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
             self.expire_if_needed_locked(key);
             return Ok(None);
         }
-        match entry.payload {
-            SlotPayload::Bytes(v) => Ok(Some(v)),
-            _ => Err(EngineError::WrongType),
+        match out {
+            Some(res) => res,
+            None => Ok(None),
         }
     }
 
@@ -499,15 +551,71 @@ impl Engine {
         value: &[u8],
         opts: SetOptions,
     ) -> Result<(bool, Option<Vec<u8>>), EngineError> {
+        let reader = self.data.reader();
+        self.set_with_reader(&reader, key, value, opts)
+    }
+
+    /// `SET` using a caller-reused [`EngineReader`], with an in-place String
+    /// overwrite fast path that avoids trie delete+reinsert and slab churn.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::ConflictingOptions`], [`EngineError::WrongType`],
+    /// or [`EngineError::Oom`].
+    pub fn set_with_reader(
+        &self,
+        reader: &EngineReader<'_>,
+        key: &[u8],
+        value: &[u8],
+        opts: SetOptions,
+    ) -> Result<(bool, Option<Vec<u8>>), EngineError> {
         if opts.nx && opts.xx {
             return Err(EngineError::ConflictingOptions);
         }
+
+        let mut heap_kbuf = Vec::new();
+        let mut stack_kbuf = [0u8; 256];
+        let kbuf: &[u8] = if key.len() < 255 {
+            stack_kbuf[0] = PREFIX_STRING;
+            stack_kbuf[1..=key.len()].copy_from_slice(key);
+            &stack_kbuf[..=key.len()]
+        } else {
+            encode_string_key(key, &mut heap_kbuf);
+            &heap_kbuf
+        };
+
+        // Fast path: plain overwrite of an existing non-expiring String key when
+        // no max_memory eviction or TTL options are active.
+        if !opts.nx
+            && !opts.xx
+            && !opts.get_prev
+            && opts.expiry_ms.is_none()
+            && self.config.max_memory == 0
+            && let Some(handle) = reader.get(kbuf)
+        {
+            let updated_in_place = self
+                .slab
+                .update_entry(handle, |entry| {
+                    if entry.expiry_ms.is_none()
+                        && let SlotPayload::Bytes(buf) = &mut entry.payload
+                    {
+                        buf.clear();
+                        buf.extend_from_slice(value);
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            if updated_in_place {
+                return Ok((true, None));
+            }
+        }
+
         let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
         self.expire_if_needed_locked(key);
 
-        let mut kbuf = Vec::new();
-        encode_string_key(key, &mut kbuf);
-        let existing_handle = self.data.reader().get(&kbuf);
+        let existing_handle = reader.get(kbuf);
 
         let prev_val = if opts.get_prev {
             match existing_handle.and_then(|h| self.slab.get(h)) {
@@ -549,7 +657,7 @@ impl Engine {
             payload: SlotPayload::Bytes(value.to_vec()),
         };
         let handle = self.slab.insert(entry);
-        self.data.insert(&kbuf, handle);
+        self.data.insert(kbuf, handle);
         self.key_count.fetch_add(1, Ordering::Relaxed);
 
         if let Some(exp) = effective_expiry {

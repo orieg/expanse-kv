@@ -223,6 +223,10 @@ where
     let mut read_buf = vec![0u8; 64 * 1024];
     let mut accum: Vec<u8> = Vec::with_capacity(64 * 1024);
     let mut write_buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+    // Single reusable optimistic reader per connection: registers once on
+    // connect and drops on disconnect, holding zero epoch pins when idle
+    // (AGENTS.md §2.5).
+    let reader = state.engine.reader();
 
     loop {
         let n = match stream.read(&mut read_buf).await {
@@ -237,13 +241,15 @@ where
 
         write_buf.clear();
         let mut offset = 0usize;
+        let mut batch_cmds = 0u64;
         let mut protocol_error = false;
         {
             let mut args: Vec<&[u8]> = Vec::with_capacity(16);
             while offset < accum.len() {
                 match parse_command_into(&accum[offset..], &mut args, limits) {
                     Ok(CommandStatus::Complete { consumed }) => {
-                        state.handle_command(&args, &mut conn, &mut write_buf);
+                        state.handle_command(&args, &mut conn, &reader, &mut write_buf);
+                        batch_cmds += 1;
                         offset += consumed;
                         if conn.should_close {
                             break;
@@ -259,6 +265,12 @@ where
                     }
                 }
             }
+        }
+        if batch_cmds > 0 {
+            state
+                .metrics
+                .commands_total
+                .fetch_add(batch_cmds, Ordering::Relaxed);
         }
 
         if offset > 0 {

@@ -9,7 +9,7 @@ use expanse_kv_core::resp::{
     encode_array_header, encode_bulk_string, encode_integer, encode_null, encode_null_bulk,
     encode_simple_error, encode_simple_string,
 };
-use expanse_kv_engine::{Engine, EngineError, KeyType, ScoreBound, SetOptions};
+use expanse_kv_engine::{Engine, EngineError, EngineReader, KeyType, ScoreBound, SetOptions};
 use expanse_kv_persist::aof::{AofWriter, replay_aof};
 
 fn encode_map_header(len: usize, out: &mut Vec<u8>) {
@@ -60,9 +60,10 @@ impl ServerState {
                         aof: None,
                         snapshot_path: None,
                     };
+                    let reader = temp.engine.reader();
                     let _stats = replay_aof(path, true, |cmd| {
                         sink.clear();
-                        temp.dispatch_direct(cmd, &mut replay_state, &mut sink, false);
+                        temp.dispatch_direct(cmd, &mut replay_state, &reader, &mut sink, false);
                         Ok(())
                     })
                     .map_err(|e| format!("failed to replay AOF `{}`: {e}", path.display()))?;
@@ -108,26 +109,61 @@ impl ServerState {
         Ok(())
     }
 
-    /// Dispatches one parsed RESP command, handling `AUTH`, `MULTI`/`EXEC`,
-    /// `DISCARD`, AOF logging, and response encoding into `out`.
-    pub fn handle_command(&self, args: &[&[u8]], conn: &mut ConnState, out: &mut Vec<u8>) {
+    /// Dispatches one parsed RESP command using a caller-reused [`EngineReader`],
+    /// handling `AUTH`, `MULTI`/`EXEC`, `DISCARD`, AOF logging, and response
+    /// encoding into `out`.
+    pub fn handle_command(
+        &self,
+        args: &[&[u8]],
+        conn: &mut ConnState,
+        reader: &EngineReader<'_>,
+        out: &mut Vec<u8>,
+    ) {
         if args.is_empty() {
             return;
         }
-        self.metrics.commands_total.fetch_add(1, Ordering::Relaxed);
 
-        let cmd = ascii_upper(args[0]);
+        let mut cmd_buf = [0u8; 24];
+        let cmd = uppercase_stack(args[0], &mut cmd_buf);
 
         // Commands allowed before AUTH
-        if !conn.authenticated && !matches!(cmd.as_slice(), b"AUTH" | b"HELLO" | b"PING" | b"QUIT")
-        {
+        if !conn.authenticated && !matches!(cmd, b"AUTH" | b"HELLO" | b"PING" | b"QUIT") {
             self.metrics.errors_total.fetch_add(1, Ordering::Relaxed);
             encode_simple_error(b"NOAUTH Authentication required.", out);
             return;
         }
 
+        // Fast-path common read/write commands without transaction check overhead when !in_multi
+        if !conn.in_multi {
+            match cmd {
+                b"GET" => {
+                    if args.len() != 2 {
+                        self.err_arity("get", out);
+                    } else {
+                        match self
+                            .engine
+                            .get_with_reader(reader, args[1], |v| encode_bulk_string(v, out))
+                        {
+                            Ok(Some(())) => {}
+                            Ok(None) => encode_nil(conn.resp3, out),
+                            Err(e) => self.err_engine(e, out),
+                        }
+                    }
+                    return;
+                }
+                b"SET" => {
+                    let mutated = self.handle_set(args, conn.resp3, reader, out);
+                    if mutated {
+                        self.append_aof(args);
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // Transaction control
-        match cmd.as_slice() {
+        match cmd {
             b"MULTI" => {
                 if conn.in_multi {
                     self.metrics.errors_total.fetch_add(1, Ordering::Relaxed);
@@ -161,7 +197,7 @@ impl ServerState {
                 encode_array_header(queued.len(), out);
                 for qcmd in &queued {
                     let refs: Vec<&[u8]> = qcmd.iter().map(Vec::as_slice).collect();
-                    self.dispatch_direct(&refs, conn, out, true);
+                    self.dispatch_direct(&refs, conn, reader, out, true);
                 }
                 return;
             }
@@ -174,7 +210,7 @@ impl ServerState {
             return;
         }
 
-        self.dispatch_direct(args, conn, out, true);
+        self.dispatch_direct(args, conn, reader, out, true);
     }
 
     fn append_aof(&self, args: &[&[u8]]) {
@@ -192,16 +228,18 @@ impl ServerState {
         &self,
         args: &[&[u8]],
         conn: &mut ConnState,
+        reader: &EngineReader<'_>,
         out: &mut Vec<u8>,
         log_aof: bool,
     ) {
         if args.is_empty() {
             return;
         }
-        let cmd = ascii_upper(args[0]);
+        let mut cmd_buf = [0u8; 24];
+        let cmd = uppercase_stack(args[0], &mut cmd_buf);
         let mut mutated = false;
 
-        match cmd.as_slice() {
+        match cmd {
             // --- Connection & Server ---
             b"PING" => match args.len() {
                 1 => encode_simple_string(b"PONG", out),
@@ -305,15 +343,18 @@ impl ServerState {
                 if args.len() != 2 {
                     self.err_arity("get", out);
                 } else {
-                    match self.engine.get(args[1]) {
-                        Ok(Some(v)) => encode_bulk_string(&v, out),
+                    match self
+                        .engine
+                        .get_with_reader(reader, args[1], |v| encode_bulk_string(v, out))
+                    {
+                        Ok(Some(())) => {}
                         Ok(None) => encode_nil(conn.resp3, out),
                         Err(e) => self.err_engine(e, out),
                     }
                 }
             }
             b"SET" => {
-                mutated = self.handle_set(args, conn.resp3, out);
+                mutated = self.handle_set(args, conn.resp3, reader, out);
             }
             b"MGET" => {
                 if args.len() < 2 {
@@ -930,7 +971,13 @@ impl ServerState {
         encode_integer(conn.id as i64, out);
     }
 
-    fn handle_set(&self, args: &[&[u8]], resp3: bool, out: &mut Vec<u8>) -> bool {
+    fn handle_set(
+        &self,
+        args: &[&[u8]],
+        resp3: bool,
+        reader: &EngineReader<'_>,
+        out: &mut Vec<u8>,
+    ) -> bool {
         if args.len() < 3 {
             self.err_arity("set", out);
             return false;
@@ -1002,7 +1049,7 @@ impl ServerState {
             i += 1;
         }
 
-        match self.engine.set(args[1], args[2], opts) {
+        match self.engine.set_with_reader(reader, args[1], args[2], opts) {
             Ok((written, prev)) => {
                 if opts.get_prev {
                     match prev {
@@ -1378,6 +1425,17 @@ fn format_score(score: f64) -> String {
     } else {
         format!("{score}")
     }
+}
+
+#[inline]
+fn uppercase_stack<'a>(bytes: &[u8], buf: &'a mut [u8; 24]) -> &'a [u8] {
+    if bytes.len() > buf.len() {
+        return b"";
+    }
+    for (dst, &src) in buf.iter_mut().zip(bytes.iter()) {
+        *dst = src.to_ascii_uppercase();
+    }
+    &buf[..bytes.len()]
 }
 
 fn ascii_upper(bytes: &[u8]) -> Vec<u8> {
