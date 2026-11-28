@@ -9,10 +9,66 @@ use expanse_kv_core::key::{
     encode_zset_member_key, encode_zset_member_prefix, encode_zset_score_bound,
     encode_zset_score_key, encode_zset_score_prefix,
 };
-use expanse_trie::sync::{OrderedBytesReader, SyncExpanseOrderedBytesMap, SyncExpanseSet};
+use expanse_trie::domain::escape_encode;
+use expanse_trie::strmap::NulFreeStr;
+use expanse_trie::sync::{StrReader, SyncExpanseOrderedBytesMap, SyncExpanseSet};
 
 /// Reusable optimistic reader handle for [`Engine`].
-pub type EngineReader<'a> = OrderedBytesReader<'a>;
+///
+/// Wraps `StrReader` directly on `data.inner()` and carries a reusable stack
+/// buffer so hot-path string lookups avoid both heap allocation and per-call
+/// 512-byte stack zero-initialization.
+pub struct EngineReader<'a> {
+    str_reader: StrReader<'a>,
+    escape_buf: [u8; 512],
+}
+
+/// Escapes `[PREFIX_STRING, key...]` into `out` matching `expanse_trie::domain::escape_encode`
+/// (`0x00` -> `[0x01, 0x01]`, `0x01` -> `[0x01, 0x02]`), returning `Some(len)`
+/// if it fits in `out` or `None` if `key` is too long for the stack buffer.
+#[inline]
+fn escape_string_key_into_buf(key: &[u8], out: &mut [u8; 512]) -> Option<usize> {
+    if key.len() > 254 {
+        return None;
+    }
+    // PREFIX_STRING == 0x01 escapes to [0x01, 0x02].
+    out[0] = 0x01;
+    out[1] = 0x02;
+    // Fast SIMD-friendly scan: 99.99% of keys contain no 0x00 or 0x01 bytes.
+    if !key.iter().any(|&b| b <= 0x01) {
+        let end = 2 + key.len();
+        out[2..end].copy_from_slice(key);
+        return Some(end);
+    }
+    let mut pos = 2usize;
+    for &b in key {
+        if b <= 0x01 {
+            out[pos] = 0x01;
+            out[pos + 1] = b + 1;
+            pos += 2;
+        } else {
+            out[pos] = b;
+            pos += 1;
+        }
+    }
+    Some(pos)
+}
+
+impl<'a> EngineReader<'a> {
+    #[inline]
+    fn get_string_handle(&mut self, key: &[u8]) -> Option<u64> {
+        if let Some(len) = escape_string_key_into_buf(key, &mut self.escape_buf) {
+            let nfs = NulFreeStr::new(&self.escape_buf[..len]).expect("escaped key has no NUL");
+            self.str_reader.get(nfs)
+        } else {
+            let mut raw = Vec::with_capacity(key.len() + 1);
+            encode_string_key(key, &mut raw);
+            let escaped = escape_encode(&raw);
+            let nfs = NulFreeStr::new(&escaped).expect("escaped key has no NUL");
+            self.str_reader.get(nfs)
+        }
+    }
+}
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -232,8 +288,11 @@ impl Engine {
     /// reader-registry lock contention while holding zero epoch pins when idle
     /// (`AGENTS.md` §2.5).
     #[must_use]
-    pub fn reader(&self) -> OrderedBytesReader<'_> {
-        self.data.reader()
+    pub fn reader(&self) -> EngineReader<'_> {
+        EngineReader {
+            str_reader: self.data.inner().reader(),
+            escape_buf: [0u8; 512],
+        }
     }
 
     /// Returns a reference to the backing ordered data trie (for Phase 2 diagnostics).
@@ -473,45 +532,34 @@ impl Engine {
     // String & Generic Key Commands
     // -----------------------------------------------------------------------
 
-    /// `GET key`: optimistic read path (`OrderedBytesReader::get`).
+    /// `GET key`: optimistic read path (`StrReader::get`).
     ///
     /// # Errors
     ///
     /// Returns [`EngineError::WrongType`] if `key` holds a non-string type.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, EngineError> {
-        let reader = self.data.reader();
-        self.get_with_reader(&reader, key, |v| v.to_vec())
+        let mut reader = self.reader();
+        self.get_with_reader(&mut reader, key, |v| v.to_vec())
     }
 
-    /// Zero-allocation `GET key` using a caller-reused [`OrderedBytesReader`].
+    /// Zero-allocation `GET key` using a caller-reused [`EngineReader`].
     ///
-    /// Calls `f` with a borrowed slice of the string value directly inside the
-    /// slab shard read guard, avoiding per-op key and value heap allocations.
+    /// Escapes `[PREFIX_STRING, key...]` onto the stack and calls `f` with a
+    /// borrowed slice of the string value directly inside the slab shard read
+    /// guard, avoiding per-op key, escape, and value heap allocations.
     ///
     /// # Errors
     ///
     /// Returns [`EngineError::WrongType`] if `key` holds a non-string type.
+    #[inline]
     pub fn get_with_reader<R>(
         &self,
-        reader: &OrderedBytesReader<'_>,
+        reader: &mut EngineReader<'_>,
         key: &[u8],
         f: impl FnOnce(&[u8]) -> R,
     ) -> Result<Option<R>, EngineError> {
-        let handle = if key.len() < 255 {
-            let mut stack_buf = [0u8; 256];
-            stack_buf[0] = PREFIX_STRING;
-            stack_buf[1..=key.len()].copy_from_slice(key);
-            match reader.get(&stack_buf[..=key.len()]) {
-                Some(h) => h,
-                None => return Ok(None),
-            }
-        } else {
-            let mut kbuf = Vec::with_capacity(key.len() + 1);
-            encode_string_key(key, &mut kbuf);
-            match reader.get(&kbuf) {
-                Some(h) => h,
-                None => return Ok(None),
-            }
+        let Some(handle) = reader.get_string_handle(key) else {
+            return Ok(None);
         };
 
         let mut expired = false;
@@ -551,8 +599,8 @@ impl Engine {
         value: &[u8],
         opts: SetOptions,
     ) -> Result<(bool, Option<Vec<u8>>), EngineError> {
-        let reader = self.data.reader();
-        self.set_with_reader(&reader, key, value, opts)
+        let mut reader = self.reader();
+        self.set_with_reader(&mut reader, key, value, opts)
     }
 
     /// `SET` using a caller-reused [`EngineReader`], with an in-place String
@@ -564,7 +612,7 @@ impl Engine {
     /// or [`EngineError::Oom`].
     pub fn set_with_reader(
         &self,
-        reader: &EngineReader<'_>,
+        reader: &mut EngineReader<'_>,
         key: &[u8],
         value: &[u8],
         opts: SetOptions,
@@ -573,17 +621,6 @@ impl Engine {
             return Err(EngineError::ConflictingOptions);
         }
 
-        let mut heap_kbuf = Vec::new();
-        let mut stack_kbuf = [0u8; 256];
-        let kbuf: &[u8] = if key.len() < 255 {
-            stack_kbuf[0] = PREFIX_STRING;
-            stack_kbuf[1..=key.len()].copy_from_slice(key);
-            &stack_kbuf[..=key.len()]
-        } else {
-            encode_string_key(key, &mut heap_kbuf);
-            &heap_kbuf
-        };
-
         // Fast path: plain overwrite of an existing non-expiring String key when
         // no max_memory eviction or TTL options are active.
         if !opts.nx
@@ -591,7 +628,7 @@ impl Engine {
             && !opts.get_prev
             && opts.expiry_ms.is_none()
             && self.config.max_memory == 0
-            && let Some(handle) = reader.get(kbuf)
+            && let Some(handle) = reader.get_string_handle(key)
         {
             let updated_in_place = self
                 .slab
@@ -612,10 +649,21 @@ impl Engine {
             }
         }
 
+        let mut heap_kbuf = Vec::new();
+        let mut stack_kbuf = [0u8; 256];
+        let kbuf: &[u8] = if key.len() < 255 {
+            stack_kbuf[0] = PREFIX_STRING;
+            stack_kbuf[1..=key.len()].copy_from_slice(key);
+            &stack_kbuf[..=key.len()]
+        } else {
+            encode_string_key(key, &mut heap_kbuf);
+            &heap_kbuf
+        };
+
         let _guard = self.mutation_lock.lock().expect("mutation lock poisoned");
         self.expire_if_needed_locked(key);
 
-        let existing_handle = reader.get(kbuf);
+        let existing_handle = reader.get_string_handle(key);
 
         let prev_val = if opts.get_prev {
             match existing_handle.and_then(|h| self.slab.get(h)) {

@@ -4,23 +4,49 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use expanse_kv_engine::Engine;
 
-/// Atomic operational counters for the `expanse-kv` server.
+/// Cache-line-padded atomic counter to prevent cross-core false sharing.
+#[repr(align(64))]
+#[derive(Debug, Default)]
+pub struct PaddedCounter(pub AtomicU64);
+
+impl PaddedCounter {
+    /// Atomically adds `v` to the counter.
+    #[inline]
+    pub fn fetch_add(&self, v: u64, order: Ordering) -> u64 {
+        self.0.fetch_add(v, order)
+    }
+
+    /// Atomically subtracts `v` from the counter.
+    #[inline]
+    pub fn fetch_sub(&self, v: u64, order: Ordering) -> u64 {
+        self.0.fetch_sub(v, order)
+    }
+
+    /// Loads the current counter value.
+    #[inline]
+    #[must_use]
+    pub fn load(&self, order: Ordering) -> u64 {
+        self.0.load(order)
+    }
+}
+
+/// Atomic operational counters for the `expanse-kv` server (cache-line padded).
 #[derive(Debug, Default)]
 pub struct ServerMetrics {
     /// Total commands executed across all connections.
-    pub commands_total: AtomicU64,
+    pub commands_total: PaddedCounter,
     /// Total TCP connections accepted since startup.
-    pub connections_total: AtomicU64,
+    pub connections_total: PaddedCounter,
     /// Currently open client connections.
-    pub connections_active: AtomicU64,
+    pub connections_active: PaddedCounter,
     /// Total protocol/command errors returned to clients.
-    pub errors_total: AtomicU64,
+    pub errors_total: PaddedCounter,
     /// Total bytes read from client sockets.
-    pub read_bytes_total: AtomicU64,
+    pub read_bytes_total: PaddedCounter,
     /// Total bytes written to client sockets.
-    pub write_bytes_total: AtomicU64,
+    pub write_bytes_total: PaddedCounter,
     /// Total mutating commands appended to the AOF.
-    pub aof_appends_total: AtomicU64,
+    pub aof_appends_total: PaddedCounter,
 }
 
 impl ServerMetrics {

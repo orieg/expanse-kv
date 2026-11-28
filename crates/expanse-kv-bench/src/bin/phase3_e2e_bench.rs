@@ -7,7 +7,7 @@
 //! snapshots (`AGENTS.md` §8.4, §8.6, §8.11).
 
 use std::env;
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -28,20 +28,50 @@ impl XorShift64 {
     }
 }
 
-fn format_key(id: u64, out: &mut Vec<u8>) {
-    out.clear();
-    let org = id % 64;
-    let user = (id / 64) % 4096;
-    write!(out, "org:{org:04}:user:{user:06}:session:{id:08}").expect("format key");
+#[inline]
+fn write_fixed_dec(mut v: u64, dst: &mut [u8]) {
+    let mut i = dst.len();
+    while i > 0 {
+        i -= 1;
+        dst[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
 }
 
+#[inline]
+fn format_key(id: u64, out: &mut Vec<u8>) {
+    // Exact 36-byte key: "org:0000:user:000000:session:00000000" (37 bytes)
+    out.clear();
+    let mut buf = *b"org:0000:user:000000:session:00000000";
+    let org = id % 64;
+    let user = (id / 64) % 4096;
+    write_fixed_dec(org, &mut buf[4..8]);
+    write_fixed_dec(user, &mut buf[14..20]);
+    write_fixed_dec(id, &mut buf[29..37]);
+    out.extend_from_slice(&buf);
+}
+
+#[inline]
 fn append_get(key: &[u8], out: &mut Vec<u8>) {
-    write!(out, "*2\r\n$3\r\nGET\r\n${}\r\n", key.len()).expect("format GET");
+    if key.len() == 37 {
+        out.extend_from_slice(b"*2\r\n$3\r\nGET\r\n$37\r\n");
+    } else {
+        write!(out, "*2\r\n$3\r\nGET\r\n${}\r\n", key.len()).expect("format GET");
+    }
     out.extend_from_slice(key);
     out.extend_from_slice(b"\r\n");
 }
 
+#[inline]
 fn append_set(key: &[u8], val: &[u8], out: &mut Vec<u8>) {
+    if key.len() == 37 && val.len() == 64 {
+        out.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$37\r\n");
+        out.extend_from_slice(key);
+        out.extend_from_slice(b"\r\n$64\r\n");
+        out.extend_from_slice(val);
+        out.extend_from_slice(b"\r\n");
+        return;
+    }
     write!(out, "*3\r\n$3\r\nSET\r\n${}\r\n", key.len()).expect("format SET");
     out.extend_from_slice(key);
     write!(out, "\r\n${}\r\n", val.len()).expect("format SET len");
@@ -49,37 +79,96 @@ fn append_set(key: &[u8], val: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(b"\r\n");
 }
 
-/// Reads and consumes exactly one RESP2 reply frame from `reader`, returning
-/// the number of payload bytes consumed (`AGENTS.md` §8.6: output is consumed).
-fn read_one_reply<R: Read>(reader: &mut BufReader<R>, line_buf: &mut Vec<u8>) -> u64 {
-    line_buf.clear();
-    let mut b = [0u8; 1];
-    loop {
-        reader.read_exact(&mut b).expect("read reply byte");
-        line_buf.push(b[0]);
-        if b[0] == b'\n' && line_buf.len() >= 2 && line_buf[line_buf.len() - 2] == b'\r' {
-            break;
+/// Zero-allocation pipelined RESP2 reply reader (`AGENTS.md` §8.6: consumes
+/// every reply and folds payload lengths into a checksum).
+struct ReplyReader {
+    buf: Vec<u8>,
+    pos: usize,
+    filled: usize,
+}
+
+impl ReplyReader {
+    fn new() -> Self {
+        Self {
+            buf: vec![0u8; 64 * 1024],
+            pos: 0,
+            filled: 0,
         }
     }
-    match line_buf[0] {
-        b'+' | b':' => line_buf.len() as u64,
-        b'-' => {
-            panic!(
-                "server returned RESP error during benchmark: {}",
-                String::from_utf8_lossy(line_buf)
-            );
-        }
-        b'$' => {
-            let len_str =
-                std::str::from_utf8(&line_buf[1..line_buf.len() - 2]).expect("valid bulk length");
-            let len: isize = len_str.parse().expect("parse bulk length");
-            if len < 0 {
-                return 0;
+
+    fn read_n_replies(&mut self, stream: &mut TcpStream, count: usize) -> u64 {
+        let mut checksum = 0u64;
+        let mut remaining = count;
+        while remaining > 0 {
+            while remaining > 0 && self.pos < self.filled {
+                let slice = &self.buf[self.pos..self.filled];
+                match parse_one_reply(slice) {
+                    Some((consumed, val_bytes)) => {
+                        self.pos += consumed;
+                        checksum = checksum.wrapping_add(val_bytes);
+                        remaining -= 1;
+                    }
+                    None => break,
+                }
             }
-            let to_read = (len as usize) + 2;
-            let mut skip = vec![0u8; to_read];
-            reader.read_exact(&mut skip).expect("read bulk payload");
-            len as u64
+            if remaining == 0 {
+                if self.pos == self.filled {
+                    self.pos = 0;
+                    self.filled = 0;
+                }
+                break;
+            }
+            if self.pos > 0 {
+                let rem = self.filled - self.pos;
+                self.buf.copy_within(self.pos..self.filled, 0);
+                self.pos = 0;
+                self.filled = rem;
+            }
+            if self.filled == self.buf.len() {
+                self.buf.resize(self.buf.len() * 2, 0);
+            }
+            let n = stream
+                .read(&mut self.buf[self.filled..])
+                .expect("read reply bytes");
+            assert!(n > 0, "unexpected EOF while reading replies");
+            self.filled += n;
+        }
+        checksum
+    }
+}
+
+#[inline]
+fn parse_one_reply(slice: &[u8]) -> Option<(usize, u64)> {
+    let mut i = 1usize;
+    let len = slice.len();
+    let crlf = loop {
+        if i + 1 >= len {
+            return None;
+        }
+        if slice[i] == b'\r' && slice[i + 1] == b'\n' {
+            break i;
+        }
+        i += 1;
+    };
+    match slice[0] {
+        b'+' | b':' => Some((crlf + 2, (crlf + 2) as u64)),
+        b'-' => panic!(
+            "server returned RESP error during benchmark: {}",
+            String::from_utf8_lossy(&slice[..crlf])
+        ),
+        b'$' => {
+            if crlf == 3 && slice[1] == b'-' && slice[2] == b'1' {
+                return Some((5, 0));
+            }
+            let mut n = 0usize;
+            for &b in &slice[1..crlf] {
+                n = n * 10 + usize::from(b - b'0');
+            }
+            let total = crlf + 2 + n + 2;
+            if total > len {
+                return None;
+            }
+            Some((total, n as u64))
         }
         other => panic!("unexpected RESP reply prefix byte 0x{other:02x}"),
     }
@@ -118,11 +207,9 @@ fn populate(host: &str, ports: &[u16], n_keys: u64, threads: usize, val_len: usi
         handles.push(thread::spawn(move || {
             let mut stream = TcpStream::connect(&addr_owned).expect("connect for populate");
             stream.set_nodelay(true).expect("set_nodelay");
-            let mut reader =
-                BufReader::with_capacity(64 * 1024, stream.try_clone().expect("clone"));
+            let mut reader = ReplyReader::new();
             let mut key = Vec::with_capacity(64);
             let mut batch = Vec::with_capacity(16 * 1024);
-            let mut line = Vec::with_capacity(128);
             let mut cur = start;
             let pipe = 64usize;
             while cur < limit {
@@ -135,10 +222,7 @@ fn populate(host: &str, ports: &[u16], n_keys: u64, threads: usize, val_len: usi
                     count += 1;
                 }
                 stream.write_all(&batch).expect("write populate batch");
-                let mut pop_bytes = 0u64;
-                for _ in 0..count {
-                    pop_bytes = pop_bytes.wrapping_add(read_one_reply(&mut reader, &mut line));
-                }
+                let pop_bytes = reader.read_n_replies(&mut stream, count);
                 std::hint::black_box(pop_bytes);
             }
         }));
@@ -189,13 +273,11 @@ fn run_replicate(params: &BenchParams<'_>, write_pct: u64, rep_seed: u64) -> Rep
         handles.push(thread::spawn(move || {
             let mut stream = TcpStream::connect(&addr_owned).expect("connect worker");
             stream.set_nodelay(true).expect("set_nodelay");
-            let mut reader =
-                BufReader::with_capacity(64 * 1024, stream.try_clone().expect("clone"));
+            let mut reader = ReplyReader::new();
             let mut rng =
                 XorShift64(rep_seed ^ ((tid as u64 + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
             let mut key = Vec::with_capacity(64);
             let mut batch = Vec::with_capacity(pipeline * 128);
-            let mut line = Vec::with_capacity(128);
             let mut latencies_ns: Vec<u64> = Vec::with_capacity(batches_per_thread);
             let mut checksum = 0u64;
 
@@ -219,9 +301,7 @@ fn run_replicate(params: &BenchParams<'_>, write_pct: u64, rep_seed: u64) -> Rep
                 }
                 let bt = Instant::now();
                 stream.write_all(&batch).expect("write pipeline");
-                for _ in 0..pipeline {
-                    checksum = checksum.wrapping_add(read_one_reply(&mut reader, &mut line));
-                }
+                checksum = checksum.wrapping_add(reader.read_n_replies(&mut stream, pipeline));
                 latencies_ns.push(bt.elapsed().as_nanos() as u64);
             }
             let elapsed = t0.elapsed().as_secs_f64();
