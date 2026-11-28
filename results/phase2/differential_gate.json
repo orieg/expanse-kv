@@ -1,0 +1,6 @@
+{
+  "provenance": "measured: Darwin 25.4.0 arm64, 74c9822",
+  "operations": 1000000,
+  "divergences": 0,
+  "verdict": "PASS"
+}
