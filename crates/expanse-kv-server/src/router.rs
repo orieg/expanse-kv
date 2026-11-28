@@ -60,10 +60,10 @@ impl ServerState {
                         aof: None,
                         snapshot_path: None,
                     };
-                    let reader = temp.engine.reader();
+                    let mut reader = temp.engine.reader();
                     let _stats = replay_aof(path, true, |cmd| {
                         sink.clear();
-                        temp.dispatch_direct(cmd, &mut replay_state, &reader, &mut sink, false);
+                        temp.dispatch_direct(cmd, &mut replay_state, &mut reader, &mut sink, false);
                         Ok(())
                     })
                     .map_err(|e| format!("failed to replay AOF `{}`: {e}", path.display()))?;
@@ -116,7 +116,7 @@ impl ServerState {
         &self,
         args: &[&[u8]],
         conn: &mut ConnState,
-        reader: &EngineReader<'_>,
+        reader: &mut EngineReader<'_>,
         out: &mut Vec<u8>,
     ) {
         if args.is_empty() {
@@ -228,7 +228,7 @@ impl ServerState {
         &self,
         args: &[&[u8]],
         conn: &mut ConnState,
-        reader: &EngineReader<'_>,
+        reader: &mut EngineReader<'_>,
         out: &mut Vec<u8>,
         log_aof: bool,
     ) {
@@ -975,7 +975,7 @@ impl ServerState {
         &self,
         args: &[&[u8]],
         resp3: bool,
-        reader: &EngineReader<'_>,
+        reader: &mut EngineReader<'_>,
         out: &mut Vec<u8>,
     ) -> bool {
         if args.len() < 3 {

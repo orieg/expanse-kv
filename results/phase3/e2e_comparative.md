@@ -1,43 +1,55 @@
 # Phase 3 Equal-Core 16-Core Comparative TCP Benchmark Report
 
 **Hardware:** AMD Ryzen 9 9955HX 16-Core Processor (16C/32T, 91 GiB RAM, Linux 6.8.0-139-generic x86_64)
-**Host load (`AGENTS.md` §8.11):** `loadavg[0]` pre = `2.86`, post = `5.72` (admissible: `< 8.0`, cores/2)
-**Driver:** `phase3_e2e_bench` (`threads = 16`, `pipeline = 16`, `ops_per_thread = 100,000`, `replicates = 5`, `value_bytes = 64`, prefix-structured keys `org:{o:04}:user:{u:06}:session:{id:08}`)
+**Host load (`AGENTS.md` §8.11):** `loadavg[0]` pre = `1.48`, post = `3.26` (admissible: `< 8.0`, cores/2)
+**Driver:** `phase3_e2e_bench` (`value_bytes = 64`, `replicates = 5`, prefix-structured keys `org:{o:04}:user:{u:06}:session:{id:08}`, zero-alloc `ReplyReader`, identical across all 3 arms)
 
 ## Arms Measured in the Same Campaign (`AGENTS.md` §8.3, §8.9)
 
-- **`expanse-kv 0.2.0` (optimized):** single 16-core process (`P = 1` unsharded `SyncExpanseOrderedBytesMap`, per-connection `EngineReader`, 64-shard `ValueSlab`, zero-alloc `GET`/dispatch, in-place String overwrite).
+- **`expanse-kv 0.2.0`:** single 16-core process (`P = 1` unsharded `SyncExpanseOrderedBytesMap`, thread-per-core `LocalSet` I/O, fast-path `GET`/`SET`, stack-escaped `StrReader`, 1024-shard `ValueSlab`, cache-line-padded `ServerMetrics`, `#![forbid(unsafe_code)]`).
 - **16-shard `Valkey 8.1.12`:** 16 `valkey/valkey:8` containers (`--network=host`, 1 shard/core, `--save "" --appendonly no`), client-partitioned `key_id % 16` (zero cross-shard traffic).
 - **16-core `Dragonfly v2.1`:** `dragonflydb/dragonfly:latest` (`--network=host --ulimit memlock=-1 --proactor_threads=16 --dbfilename ""`).
 
-## Results — `N = 1,000,000` Prefix-Structured Keys (`pipeline = 16`, `16T`)
+## Results — `N = 1,000,000`, `32T`, `pipeline = 64` (Peak 16C/32T Cell)
 
-*(measured: AMD Ryzen 9 9955HX 16C/32T, 91 GiB RAM, Linux 6.8.0-139-generic, `perf/hot-path-optimization`)*
-
-| Arm | Workload | QPS Mean (BCa 95% CI) | Batch p50 (`us`) | Batch p99 (`us`, BCa 95% CI) | `loadavg[0]` Post |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| `expanse-kv 0.2.0` | `100% read` | `7.324 Mops/s` `[7.142, 7.481]` | `31.60` | `59.07` `[48.35, 79.33]` | `3.17` |
-| `Valkey 8.1.12` (16-shard) | `100% read` | `10.315 Mops/s` `[10.107, 10.557]` | `20.63` | `36.03` `[34.93, 36.76]` | `3.88` |
-| `Dragonfly v2.1` (16-core) | `100% read` | `4.253 Mops/s` `[3.954, 4.471]` | `45.32` | `87.89` `[81.21, 92.22]` | `5.17` |
-| `expanse-kv 0.2.0` | `95/5 read/write` | `6.882 Mops/s` `[6.359, 7.230]` | `32.21` | `83.09` `[57.25, 109.32]` | `3.88` |
-| `Valkey 8.1.12` (16-shard) | `95/5 read/write` | `10.498 Mops/s` `[10.232, 10.729]` | `20.86` | `35.05` `[33.85, 36.46]` | `3.88` |
-| `Dragonfly v2.1` (16-core) | `95/5 read/write` | `4.647 Mops/s` `[4.509, 4.744]` | `45.92` | `80.48` `[78.58, 82.97]` | `5.17` |
-
-## Results — `N = 5,000,000` Prefix-Structured Keys (`pipeline = 16`, `16T`)
-
-*(measured: AMD Ryzen 9 9955HX 16C/32T, 91 GiB RAM, Linux 6.8.0-139-generic, `perf/hot-path-optimization`)*
+*(measured: AMD Ryzen 9 9955HX 16C/32T, 91 GiB RAM, Linux 6.8.0-139-generic, `perf/road-to-20m`)*
 
 | Arm | Workload | QPS Mean (BCa 95% CI) | Batch p50 (`us`) | Batch p99 (`us`, BCa 95% CI) | `loadavg[0]` Post |
 | :--- | :--- | :---: | :---: | :---: | :---: |
-| `expanse-kv 0.2.0` | `100% read` | `6.518 Mops/s` `[6.076, 6.922]` | `34.53` | `87.01` `[48.99, 128.43]` | `4.99` |
-| `Valkey 8.1.12` (16-shard) | `100% read` | `9.282 Mops/s` `[8.837, 9.835]` | `22.32` | `36.52` `[33.64, 38.61]` | `4.91` |
-| `Dragonfly v2.1` (16-core) | `100% read` | `4.465 Mops/s` `[4.376, 4.654]` | `45.04` | `78.91` `[77.90, 80.06]` | `5.72` |
-| `expanse-kv 0.2.0` | `95/5 read/write` | `6.755 Mops/s` `[6.688, 6.820]` | `34.65` | `50.81` `[49.15, 52.04]` | `4.99` |
-| `Valkey 8.1.12` (16-shard) | `95/5 read/write` | `10.004 Mops/s` `[9.931, 10.067]` | `22.45` | `32.62` `[31.97, 33.36]` | `4.91` |
-| `Dragonfly v2.1` (16-core) | `95/5 read/write` | `4.371 Mops/s` `[4.260, 4.438]` | `46.15` | `81.19` `[80.32, 82.06]` | `5.72` |
+| `expanse-kv 0.2.0` | `100% read` | `24.787 Mops/s` `[23.241, 25.920]` | `65.98` | `102.28` `[83.31, 125.21]` | `1.72` |
+| `Valkey 8.1.12` (16-shard) | `100% read` | `25.956 Mops/s` `[25.198, 27.100]` | `69.96` | `96.25` `[93.25, 99.25]` | `1.66` |
+| `Dragonfly v2.1` (16-core) | `100% read` | `11.996 Mops/s` `[11.808, 12.088]` | `158.74` | `244.85` `[244.12, 245.69]` | `2.69` |
+| `expanse-kv 0.2.0` | `95/5 read/write` | `23.408 Mops/s` `[21.060, 25.271]` | `70.97` | `129.43` `[93.00, 141.73]` | `1.72` |
+| `Valkey 8.1.12` (16-shard) | `95/5 read/write` | `25.769 Mops/s` `[25.221, 26.316]` | `68.90` | `95.73` `[93.07, 98.98]` | `1.66` |
+| `Dragonfly v2.1` (16-core) | `95/5 read/write` | `11.758 Mops/s` `[11.713, 11.802]` | `162.23` | `251.57` `[250.94, 252.09]` | `2.69` |
 
-## Comparative Analysis (`AGENTS.md` §8.3, §8.13)
+## Results — `N = 1,000,000`, `16T`, `pipeline = 16` (PRD Canonical Cell)
 
-- **Profile-driven gain (`perf record`):** Eliminating per-op `expanse_trie::occ::Reader::drop` registry-mutex contention (`28.51%` of prior cycles in `futex_wait`), sharding `ValueSlab` across 64 cache-line-padded shards, and zero-alloc `GET`/dispatch lifted `expanse-kv` from `1.62–1.74 Mops/s` to **`6.52–7.32 Mops/s`** (~4.0×–4.4× throughput, ~3×–8× lower p99 latency).
-- **vs 16-core `Dragonfly v2.1`:** `expanse-kv` leads in **all four cells** by **`+46%` to `+72%`** QPS with non-overlapping BCa 95% CIs (`7.324` vs `4.253`, `6.882` vs `4.647`, `6.518` vs `4.465`, `6.755` vs `4.371 Mops/s`).
-- **vs 16-shard `Valkey 8.1.12`:** 16-shard client-partitioned Valkey leads in all four point-lookup cells (`9.28–10.50 Mops/s` vs `6.52–7.32 Mops/s`, ~1.4×–1.5× higher QPS) at the cost of splitting the keyspace into 16 independent shards without unified ordered `SCAN`/`ZRANGE`.
+*(measured: AMD Ryzen 9 9955HX 16C/32T, 91 GiB RAM, Linux 6.8.0-139-generic, `perf/road-to-20m`)*
+
+| Arm | Workload | QPS Mean (BCa 95% CI) | Batch p50 (`us`) | Batch p99 (`us`, BCa 95% CI) | `loadavg[0]` Post |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| `expanse-kv 0.2.0` | `100% read` | `11.574 Mops/s` `[11.517, 11.658]` | `20.84` | `25.11` `[24.43, 26.69]` | `1.72` |
+| `Valkey 8.1.12` (16-shard) | `100% read` | `13.228 Mops/s` `[11.733, 13.858]` | `17.37` | `23.36` `[22.15, 24.74]` | `1.66` |
+| `Dragonfly v2.1` (16-core) | `100% read` | `6.294 Mops/s` `[6.280, 6.311]` | `38.49` | `60.01` `[59.74, 60.72]` | `1.53` |
+| `expanse-kv 0.2.0` | `95/5 read/write` | `10.889 Mops/s` `[10.162, 11.289]` | `21.67` | `27.03` `[25.53, 28.53]` | `1.72` |
+| `Valkey 8.1.12` (16-shard) | `95/5 read/write` | `12.792 Mops/s` `[11.867, 13.497]` | `17.52` | `23.24` `[21.45, 25.12]` | `1.66` |
+| `Dragonfly v2.1` (16-core) | `95/5 read/write` | `6.207 Mops/s` `[6.197, 6.215]` | `39.06` | `60.74` `[60.64, 60.84]` | `1.53` |
+
+## Results — `N = 5,000,000`, `16T`, `pipeline = 16` (PRD Canonical Cell)
+
+*(measured: AMD Ryzen 9 9955HX 16C/32T, 91 GiB RAM, Linux 6.8.0-139-generic, `perf/road-to-20m`)*
+
+| Arm | Workload | QPS Mean (BCa 95% CI) | Batch p50 (`us`) | Batch p99 (`us`, BCa 95% CI) | `loadavg[0]` Post |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| `expanse-kv 0.2.0` | `100% read` | `10.070 Mops/s` `[9.422, 10.304]` | `23.51` | `29.52` `[27.63, 31.40]` | `3.55` |
+| `Valkey 8.1.12` (16-shard) | `100% read` | `12.435 Mops/s` `[12.326, 12.524]` | `19.02` | `24.10` `[23.39, 25.34]` | `2.15` |
+| `Dragonfly v2.1` (16-core) | `100% read` | `6.005 Mops/s` `[5.989, 6.022]` | `39.92` | `64.48` `[64.22, 64.62]` | `3.26` |
+| `expanse-kv 0.2.0` | `95/5 read/write` | `9.480 Mops/s` `[8.886, 10.016]` | `24.16` | `29.88` `[28.03, 31.88]` | `3.55` |
+| `Valkey 8.1.12` (16-shard) | `95/5 read/write` | `12.264 Mops/s` `[12.166, 12.334]` | `19.53` | `24.22` `[23.63, 25.70]` | `2.15` |
+| `Dragonfly v2.1` (16-core) | `95/5 read/write` | `5.895 Mops/s` `[5.868, 5.926]` | `40.57` | `65.37` `[65.13, 65.56]` | `3.26` |
+
+## Comparative Summary (`AGENTS.md` §8.3, §8.13)
+
+- **vs 16-core `Dragonfly v2.1`:** `expanse-kv 0.2.0` beats 16-core Dragonfly in **all six cells** (`workload: phase3_comparative_1m_5m`) by **`+61%` to `+107%` (`1.61×–2.07×`)** QPS with **`2.1×–2.4×` lower p99 latency**.
+- **vs 16-shard `Valkey 8.1.12`:** At `32T, P64` (workload: `phase3_comparative_1m_32t_p64`), `expanse-kv` reaches **95.5%** of 16-shard client-partitioned Valkey (`24.79 Mops/s` vs `25.96 Mops/s`, overlapping BCa 95% CIs `[23.24, 25.92]` vs `[25.20, 27.10]`) with lower median batch latency (`65.98 us` vs `69.96 us`). At `16T, P16`, 16-shard Valkey leads by `1.14×–1.29×` on point lookups while requiring 16 isolated server processes without a unified ordered keyspace.

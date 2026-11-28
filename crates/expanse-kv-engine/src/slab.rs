@@ -9,8 +9,8 @@
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const NUM_SHARDS: usize = 64;
-const GEN_MASK: u32 = 0x00FF_FFFF;
+const NUM_SHARDS: usize = 1024;
+const GEN_MASK: u32 = 0x003F_FFFF;
 
 /// Logical Redis key type stored at `[PREFIX_STRING][key]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,12 +152,12 @@ impl ValueSlab {
 
     #[inline]
     fn pack_handle(shard: usize, generation: u32, idx: u32) -> u64 {
-        ((shard as u64) << 56) | (u64::from(generation & GEN_MASK) << 32) | u64::from(idx)
+        ((shard as u64) << 54) | (u64::from(generation & GEN_MASK) << 32) | u64::from(idx)
     }
 
     #[inline]
     fn unpack_handle(handle: u64) -> (usize, u32, usize) {
-        let shard = ((handle >> 56) as usize) & (NUM_SHARDS - 1);
+        let shard = ((handle >> 54) as usize) & (NUM_SHARDS - 1);
         let gen_id = ((handle >> 32) as u32) & GEN_MASK;
         let idx = (handle & 0xFFFF_FFFF) as usize;
         (shard, gen_id, idx)
@@ -211,6 +211,7 @@ impl ValueSlab {
     }
 
     /// Runs `f` with a shared reference to the live [`SlotEntry`], returning `None` if stale.
+    #[inline]
     pub fn with_entry<R>(&self, handle: u64, f: impl FnOnce(&SlotEntry) -> R) -> Option<R> {
         let (shard_idx, gen_id, idx) = Self::unpack_handle(handle);
         let guard = self.shards[shard_idx]

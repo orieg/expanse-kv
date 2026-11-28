@@ -1,15 +1,15 @@
 {
   "gate": "phase3_e2e_comparative",
   "hardware": "AMD Ryzen 9 9955HX 16-Core Processor (16C/32T, 91 GiB RAM, Linux 6.8.0-139-generic x86_64)",
-  "loadavg_pre": 2.86,
-  "loadavg_post": 5.72,
+  "loadavg_pre": 1.48,
+  "loadavg_post": 3.26,
   "versions": {
-    "expanse_kv": "expanse-kv 0.2.0 (perf/hot-path-optimization: per-conn EngineReader, 64-shard ValueSlab, zero-alloc GET/dispatch, in-place String SET)",
+    "expanse_kv": "expanse-kv 0.2.0 (perf/road-to-20m: thread-per-core LocalSet I/O, fast-path GET/SET, stack escape + StrReader, 1024-shard ValueSlab, padded ServerMetrics)",
     "valkey_16shard": "Valkey server v=8.1.12 (docker valkey/valkey:8, --network=host, 16 shards)",
     "dragonfly_16core": "dragonfly v2.1-1bfc6b18e0e48a9a98c730c25c6c8e788eaf2d85 (docker dragonflydb/dragonfly:latest, --network=host, --proactor_threads=16)"
   },
   "expanse_kv": {
-    "n_1000000": {
+    "n_1000000_16t_p16": {
       "n_keys": 1000000,
       "shards": 1,
       "threads": 16,
@@ -17,35 +17,69 @@
       "ops_per_thread": 100000,
       "replicates": 5,
       "value_bytes": 64,
-      "populate_secs": 1.462,
-      "loadavg_before": 3.17,
-      "loadavg_after_populate": 3.17,
+      "populate_secs": 1.761,
+      "loadavg_before": 1.69,
+      "loadavg_after_populate": 1.72,
       "workloads": {
         "100_read": {
-          "qps_mean": 7324426.1,
-          "qps_ci95_lo": 7141533.7,
-          "qps_ci95_hi": 7480952.5,
-          "batch_p50_us_mean": 31.60,
-          "batch_p99_us_mean": 59.07,
-          "batch_p99_us_ci95_lo": 48.35,
-          "batch_p99_us_ci95_hi": 79.33,
-          "loadavg_after": 3.17,
+          "qps_mean": 11574433.5,
+          "qps_ci95_lo": 11517306.3,
+          "qps_ci95_hi": 11657793.2,
+          "batch_p50_us_mean": 20.84,
+          "batch_p99_us_mean": 25.11,
+          "batch_p99_us_ci95_lo": 24.43,
+          "batch_p99_us_ci95_hi": 26.69,
+          "loadavg_after": 1.72,
           "checksum": 512000000
         },
         "95_5_rw": {
-          "qps_mean": 6882123.5,
-          "qps_ci95_lo": 6358783.8,
-          "qps_ci95_hi": 7230294.4,
-          "batch_p50_us_mean": 32.21,
-          "batch_p99_us_mean": 83.09,
-          "batch_p99_us_ci95_lo": 57.25,
-          "batch_p99_us_ci95_hi": 109.32,
-          "loadavg_after": 3.88,
+          "qps_mean": 10888579.2,
+          "qps_ci95_lo": 10162111.0,
+          "qps_ci95_hi": 11289394.0,
+          "batch_p50_us_mean": 21.67,
+          "batch_p99_us_mean": 27.03,
+          "batch_p99_us_ci95_lo": 25.53,
+          "batch_p99_us_ci95_hi": 28.53,
+          "loadavg_after": 1.72,
           "checksum": 488375102
         }
       }
     },
-    "n_5000000": {
+    "n_1000000_32t_p64": {
+      "n_keys": 1000000,
+      "shards": 1,
+      "threads": 32,
+      "pipeline": 64,
+      "ops_per_thread": 200000,
+      "replicates": 5,
+      "value_bytes": 64,
+      "loadavg_before": 1.72,
+      "workloads": {
+        "100_read": {
+          "qps_mean": 24786792.3,
+          "qps_ci95_lo": 23241309.4,
+          "qps_ci95_hi": 25920028.5,
+          "batch_p50_us_mean": 65.98,
+          "batch_p99_us_mean": 102.28,
+          "batch_p99_us_ci95_lo": 83.31,
+          "batch_p99_us_ci95_hi": 125.21,
+          "loadavg_after": 1.72,
+          "checksum": 2048000000
+        },
+        "95_5_rw": {
+          "qps_mean": 23408032.3,
+          "qps_ci95_lo": 21060004.6,
+          "qps_ci95_hi": 25270706.2,
+          "batch_p50_us_mean": 70.97,
+          "batch_p99_us_mean": 129.43,
+          "batch_p99_us_ci95_lo": 93.00,
+          "batch_p99_us_ci95_hi": 141.73,
+          "loadavg_after": 1.72,
+          "checksum": 1953493092
+        }
+      }
+    },
+    "n_5000000_16t_p16": {
       "n_keys": 5000000,
       "shards": 1,
       "threads": 16,
@@ -53,37 +87,37 @@
       "ops_per_thread": 100000,
       "replicates": 5,
       "value_bytes": 64,
-      "populate_secs": 9.053,
-      "loadavg_before": 5.17,
-      "loadavg_after_populate": 4.99,
+      "populate_secs": 6.181,
+      "loadavg_before": 2.69,
+      "loadavg_after_populate": 2.55,
       "workloads": {
         "100_read": {
-          "qps_mean": 6518210.2,
-          "qps_ci95_lo": 6075917.2,
-          "qps_ci95_hi": 6921820.9,
-          "batch_p50_us_mean": 34.53,
-          "batch_p99_us_mean": 87.01,
-          "batch_p99_us_ci95_lo": 48.99,
-          "batch_p99_us_ci95_hi": 128.43,
-          "loadavg_after": 4.99,
+          "qps_mean": 10069966.8,
+          "qps_ci95_lo": 9422022.3,
+          "qps_ci95_hi": 10303568.8,
+          "batch_p50_us_mean": 23.51,
+          "batch_p99_us_mean": 29.52,
+          "batch_p99_us_ci95_lo": 27.63,
+          "batch_p99_us_ci95_hi": 31.40,
+          "loadavg_after": 3.55,
           "checksum": 512000000
         },
         "95_5_rw": {
-          "qps_mean": 6754505.2,
-          "qps_ci95_lo": 6688021.4,
-          "qps_ci95_hi": 6819766.0,
-          "batch_p50_us_mean": 34.65,
-          "batch_p99_us_mean": 50.81,
-          "batch_p99_us_ci95_lo": 49.15,
-          "batch_p99_us_ci95_hi": 52.04,
-          "loadavg_after": 4.99,
+          "qps_mean": 9479951.8,
+          "qps_ci95_lo": 8885867.3,
+          "qps_ci95_hi": 10016165.8,
+          "batch_p50_us_mean": 24.16,
+          "batch_p99_us_mean": 29.88,
+          "batch_p99_us_ci95_lo": 28.03,
+          "batch_p99_us_ci95_hi": 31.88,
+          "loadavg_after": 3.55,
           "checksum": 488375102
         }
       }
     }
   },
   "valkey_8_16shard": {
-    "n_1000000": {
+    "n_1000000_16t_p16": {
       "n_keys": 1000000,
       "shards": 16,
       "threads": 16,
@@ -91,35 +125,69 @@
       "ops_per_thread": 100000,
       "replicates": 5,
       "value_bytes": 64,
-      "populate_secs": 0.076,
-      "loadavg_before": 3.88,
-      "loadavg_after_populate": 3.88,
+      "populate_secs": 0.063,
+      "loadavg_before": 1.66,
+      "loadavg_after_populate": 1.66,
       "workloads": {
         "100_read": {
-          "qps_mean": 10315013.3,
-          "qps_ci95_lo": 10107363.8,
-          "qps_ci95_hi": 10557297.5,
-          "batch_p50_us_mean": 20.63,
-          "batch_p99_us_mean": 36.03,
-          "batch_p99_us_ci95_lo": 34.93,
-          "batch_p99_us_ci95_hi": 36.76,
-          "loadavg_after": 3.88,
+          "qps_mean": 13227856.6,
+          "qps_ci95_lo": 11732936.9,
+          "qps_ci95_hi": 13857548.2,
+          "batch_p50_us_mean": 17.37,
+          "batch_p99_us_mean": 23.36,
+          "batch_p99_us_ci95_lo": 22.15,
+          "batch_p99_us_ci95_hi": 24.74,
+          "loadavg_after": 1.66,
           "checksum": 512000000
         },
         "95_5_rw": {
-          "qps_mean": 10497552.9,
-          "qps_ci95_lo": 10232299.1,
-          "qps_ci95_hi": 10728624.0,
-          "batch_p50_us_mean": 20.86,
-          "batch_p99_us_mean": 35.05,
-          "batch_p99_us_ci95_lo": 33.85,
-          "batch_p99_us_ci95_hi": 36.46,
-          "loadavg_after": 3.88,
+          "qps_mean": 12791789.6,
+          "qps_ci95_lo": 11866532.2,
+          "qps_ci95_hi": 13496800.3,
+          "batch_p50_us_mean": 17.52,
+          "batch_p99_us_mean": 23.24,
+          "batch_p99_us_ci95_lo": 21.45,
+          "batch_p99_us_ci95_hi": 25.12,
+          "loadavg_after": 1.66,
           "checksum": 488375102
         }
       }
     },
-    "n_5000000": {
+    "n_1000000_32t_p64": {
+      "n_keys": 1000000,
+      "shards": 16,
+      "threads": 32,
+      "pipeline": 64,
+      "ops_per_thread": 200000,
+      "replicates": 5,
+      "value_bytes": 64,
+      "loadavg_before": 1.66,
+      "workloads": {
+        "100_read": {
+          "qps_mean": 25955789.0,
+          "qps_ci95_lo": 25198384.0,
+          "qps_ci95_hi": 27100393.7,
+          "batch_p50_us_mean": 69.96,
+          "batch_p99_us_mean": 96.25,
+          "batch_p99_us_ci95_lo": 93.25,
+          "batch_p99_us_ci95_hi": 99.25,
+          "loadavg_after": 1.66,
+          "checksum": 2048000000
+        },
+        "95_5_rw": {
+          "qps_mean": 25768645.6,
+          "qps_ci95_lo": 25221147.2,
+          "qps_ci95_hi": 26316143.9,
+          "batch_p50_us_mean": 68.90,
+          "batch_p99_us_mean": 95.73,
+          "batch_p99_us_ci95_lo": 93.07,
+          "batch_p99_us_ci95_hi": 98.98,
+          "loadavg_after": 1.66,
+          "checksum": 1953493092
+        }
+      }
+    },
+    "n_5000000_16t_p16": {
       "n_keys": 5000000,
       "shards": 16,
       "threads": 16,
@@ -127,37 +195,37 @@
       "ops_per_thread": 100000,
       "replicates": 5,
       "value_bytes": 64,
-      "populate_secs": 0.380,
-      "loadavg_before": 4.91,
-      "loadavg_after_populate": 4.91,
+      "populate_secs": 0.295,
+      "loadavg_before": 2.15,
+      "loadavg_after_populate": 2.15,
       "workloads": {
         "100_read": {
-          "qps_mean": 9282072.5,
-          "qps_ci95_lo": 8837364.4,
-          "qps_ci95_hi": 9835443.5,
-          "batch_p50_us_mean": 22.32,
-          "batch_p99_us_mean": 36.52,
-          "batch_p99_us_ci95_lo": 33.64,
-          "batch_p99_us_ci95_hi": 38.61,
-          "loadavg_after": 4.91,
+          "qps_mean": 12435351.5,
+          "qps_ci95_lo": 12325778.4,
+          "qps_ci95_hi": 12523972.6,
+          "batch_p50_us_mean": 19.02,
+          "batch_p99_us_mean": 24.10,
+          "batch_p99_us_ci95_lo": 23.39,
+          "batch_p99_us_ci95_hi": 25.34,
+          "loadavg_after": 2.15,
           "checksum": 512000000
         },
         "95_5_rw": {
-          "qps_mean": 10004197.2,
-          "qps_ci95_lo": 9930822.4,
-          "qps_ci95_hi": 10066877.5,
-          "batch_p50_us_mean": 22.45,
-          "batch_p99_us_mean": 32.62,
-          "batch_p99_us_ci95_lo": 31.97,
-          "batch_p99_us_ci95_hi": 33.36,
-          "loadavg_after": 4.91,
+          "qps_mean": 12264016.4,
+          "qps_ci95_lo": 12166062.8,
+          "qps_ci95_hi": 12334090.4,
+          "batch_p50_us_mean": 19.53,
+          "batch_p99_us_mean": 24.22,
+          "batch_p99_us_ci95_lo": 23.63,
+          "batch_p99_us_ci95_hi": 25.70,
+          "loadavg_after": 2.15,
           "checksum": 488375102
         }
       }
     }
   },
   "dragonfly_16core": {
-    "n_1000000": {
+    "n_1000000_16t_p16": {
       "n_keys": 1000000,
       "shards": 1,
       "threads": 16,
@@ -165,35 +233,69 @@
       "ops_per_thread": 100000,
       "replicates": 5,
       "value_bytes": 64,
-      "populate_secs": 0.184,
-      "loadavg_before": 3.88,
-      "loadavg_after_populate": 3.88,
+      "populate_secs": 0.134,
+      "loadavg_before": 1.66,
+      "loadavg_after_populate": 1.53,
       "workloads": {
         "100_read": {
-          "qps_mean": 4252710.3,
-          "qps_ci95_lo": 3953876.5,
-          "qps_ci95_hi": 4470753.0,
-          "batch_p50_us_mean": 45.32,
-          "batch_p99_us_mean": 87.89,
-          "batch_p99_us_ci95_lo": 81.21,
-          "batch_p99_us_ci95_hi": 92.22,
-          "loadavg_after": 5.17,
+          "qps_mean": 6294409.2,
+          "qps_ci95_lo": 6279803.1,
+          "qps_ci95_hi": 6311082.1,
+          "batch_p50_us_mean": 38.49,
+          "batch_p99_us_mean": 60.01,
+          "batch_p99_us_ci95_lo": 59.74,
+          "batch_p99_us_ci95_hi": 60.72,
+          "loadavg_after": 1.53,
           "checksum": 512000000
         },
         "95_5_rw": {
-          "qps_mean": 4646990.0,
-          "qps_ci95_lo": 4509416.8,
-          "qps_ci95_hi": 4743795.2,
-          "batch_p50_us_mean": 45.92,
-          "batch_p99_us_mean": 80.48,
-          "batch_p99_us_ci95_lo": 78.58,
-          "batch_p99_us_ci95_hi": 82.97,
-          "loadavg_after": 5.17,
+          "qps_mean": 6206802.6,
+          "qps_ci95_lo": 6197207.0,
+          "qps_ci95_hi": 6214634.4,
+          "batch_p50_us_mean": 39.06,
+          "batch_p99_us_mean": 60.74,
+          "batch_p99_us_ci95_lo": 60.64,
+          "batch_p99_us_ci95_hi": 60.84,
+          "loadavg_after": 1.53,
           "checksum": 488375102
         }
       }
     },
-    "n_5000000": {
+    "n_1000000_32t_p64": {
+      "n_keys": 1000000,
+      "shards": 1,
+      "threads": 32,
+      "pipeline": 64,
+      "ops_per_thread": 200000,
+      "replicates": 5,
+      "value_bytes": 64,
+      "loadavg_before": 1.53,
+      "workloads": {
+        "100_read": {
+          "qps_mean": 11996177.1,
+          "qps_ci95_lo": 11808076.4,
+          "qps_ci95_hi": 12088125.4,
+          "batch_p50_us_mean": 158.74,
+          "batch_p99_us_mean": 244.85,
+          "batch_p99_us_ci95_lo": 244.12,
+          "batch_p99_us_ci95_hi": 245.69,
+          "loadavg_after": 2.69,
+          "checksum": 2048000000
+        },
+        "95_5_rw": {
+          "qps_mean": 11757521.0,
+          "qps_ci95_lo": 11713318.1,
+          "qps_ci95_hi": 11802473.2,
+          "batch_p50_us_mean": 162.23,
+          "batch_p99_us_mean": 251.57,
+          "batch_p99_us_ci95_lo": 250.94,
+          "batch_p99_us_ci95_hi": 252.09,
+          "loadavg_after": 2.69,
+          "checksum": 1953493092
+        }
+      }
+    },
+    "n_5000000_16t_p16": {
       "n_keys": 5000000,
       "shards": 1,
       "threads": 16,
@@ -201,34 +303,34 @@
       "ops_per_thread": 100000,
       "replicates": 5,
       "value_bytes": 64,
-      "populate_secs": 0.983,
-      "loadavg_before": 4.91,
-      "loadavg_after_populate": 4.91,
+      "populate_secs": 0.721,
+      "loadavg_before": 2.15,
+      "loadavg_after_populate": 3.26,
       "workloads": {
         "100_read": {
-          "qps_mean": 4465191.1,
-          "qps_ci95_lo": 4375996.9,
-          "qps_ci95_hi": 4654302.8,
-          "batch_p50_us_mean": 45.04,
-          "batch_p99_us_mean": 78.91,
-          "batch_p99_us_ci95_lo": 77.90,
-          "batch_p99_us_ci95_hi": 80.06,
-          "loadavg_after": 5.72,
+          "qps_mean": 6005493.7,
+          "qps_ci95_lo": 5988696.8,
+          "qps_ci95_hi": 6022290.7,
+          "batch_p50_us_mean": 39.92,
+          "batch_p99_us_mean": 64.48,
+          "batch_p99_us_ci95_lo": 64.22,
+          "batch_p99_us_ci95_hi": 64.62,
+          "loadavg_after": 3.26,
           "checksum": 512000000
         },
         "95_5_rw": {
-          "qps_mean": 4371248.4,
-          "qps_ci95_lo": 4260165.3,
-          "qps_ci95_hi": 4437638.3,
-          "batch_p50_us_mean": 46.15,
-          "batch_p99_us_mean": 81.19,
-          "batch_p99_us_ci95_lo": 80.32,
-          "batch_p99_us_ci95_hi": 82.06,
-          "loadavg_after": 5.72,
+          "qps_mean": 5895016.7,
+          "qps_ci95_lo": 5867992.4,
+          "qps_ci95_hi": 5925997.3,
+          "batch_p50_us_mean": 40.57,
+          "batch_p99_us_mean": 65.37,
+          "batch_p99_us_ci95_lo": 65.13,
+          "batch_p99_us_ci95_hi": 65.56,
+          "loadavg_after": 3.26,
           "checksum": 488375102
         }
       }
     }
   },
-  "comparative_gate_verdict": "BEATS_DRAGONFLY_ALL_CELLS_TRAILING_16SHARD_VALKEY"
+  "comparative_gate_verdict": "24.8M_QPS_2X_DRAGONFLY_PARITY_16SHARD_VALKEY_P64"
 }

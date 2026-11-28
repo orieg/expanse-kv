@@ -246,12 +246,35 @@ fn parse_usize_line(input: &[u8], pos: usize) -> Result<Option<(usize, usize)>, 
         Some(s) => s,
         None => return Ok(None),
     };
-    if slice.is_empty() {
+    let slen = slice.len();
+    if slen == 0 {
         return Ok(None);
+    }
+    // Fast path for 1-digit (`*2\r\n`, `$3\r\n`) and 2-digit (`$39\r\n`, `$64\r\n`) lengths.
+    let b0 = slice[0];
+    if b0.is_ascii_digit() {
+        let d0 = usize::from(b0 - b'0');
+        if slen >= 3 && slice[1] == b'\r' && slice[2] == b'\n' {
+            return Ok(Some((d0, pos + 3)));
+        }
+        if slen >= 4 && slice[1].is_ascii_digit() && slice[2] == b'\r' && slice[3] == b'\n' {
+            let d1 = usize::from(slice[1] - b'0');
+            return Ok(Some((d0 * 10 + d1, pos + 4)));
+        }
+        if slen >= 5
+            && slice[1].is_ascii_digit()
+            && slice[2].is_ascii_digit()
+            && slice[3] == b'\r'
+            && slice[4] == b'\n'
+        {
+            let d1 = usize::from(slice[1] - b'0');
+            let d2 = usize::from(slice[2] - b'0');
+            return Ok(Some((d0 * 100 + d1 * 10 + d2, pos + 5)));
+        }
     }
     let mut acc: usize = 0;
     let mut i = 0;
-    while i < slice.len() {
+    while i < slen {
         let b = slice[i];
         if b.is_ascii_digit() {
             acc = acc
@@ -754,10 +777,32 @@ pub fn encode_integer(n: i64, out: &mut Vec<u8>) {
 /// Encodes a RESP Bulk String (`$<len>\r\n<bytes>\r\n`).
 #[inline]
 pub fn encode_bulk_string(bytes: &[u8], out: &mut Vec<u8>) {
-    out.reserve(bytes.len() + 16);
-    out.push(b'$');
-    push_usize_ascii(bytes.len(), out);
-    out.extend_from_slice(b"\r\n");
+    let len = bytes.len();
+    out.reserve(len + 12);
+    if len < 10 {
+        out.extend_from_slice(&[b'$', b'0' + len as u8, b'\r', b'\n']);
+    } else if len < 100 {
+        out.extend_from_slice(&[
+            b'$',
+            b'0' + (len / 10) as u8,
+            b'0' + (len % 10) as u8,
+            b'\r',
+            b'\n',
+        ]);
+    } else if len < 1000 {
+        out.extend_from_slice(&[
+            b'$',
+            b'0' + (len / 100) as u8,
+            b'0' + ((len / 10) % 10) as u8,
+            b'0' + (len % 10) as u8,
+            b'\r',
+            b'\n',
+        ]);
+    } else {
+        out.push(b'$');
+        push_usize_ascii(len, out);
+        out.extend_from_slice(b"\r\n");
+    }
     out.extend_from_slice(bytes);
     out.extend_from_slice(b"\r\n");
 }
