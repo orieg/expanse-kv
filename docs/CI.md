@@ -54,6 +54,10 @@ The workflow depends on two settings outside the repository's files:
 - on crates.io, a trusted publisher on each published crate naming this
   repository, the workflow `release.yml` and the environment `release`.
 
+A repository ruleset, `release-tags`, forbids deleting, moving or force-updating
+any `v*` tag, with no bypass. A pushed release tag is permanent, so a tag on the
+wrong commit spends its version.
+
 Creating a tag is the maintainer's action (`AGENTS.md` §5).
 [`scripts/tag-release.sh X.Y.Z`](../scripts/tag-release.sh) makes the release
 gate's checks before the tag exists: the remote is this repository, the commit
