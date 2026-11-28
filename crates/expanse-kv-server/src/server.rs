@@ -2,14 +2,19 @@
 //! TTL expiry loop, and optional HTTP `/metrics` endpoint (`docs/PRD.md` §7 Phase 3).
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use expanse_kv_core::resp::{CommandStatus, ParseLimits, encode_simple_error, parse_command_into};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use rustls::ServerConfig as RustlsServerConfig;
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
+use tokio_rustls::TlsAcceptor;
 
 use crate::config::ServerConfig;
 use crate::router::{ConnState, ServerState};
@@ -18,10 +23,34 @@ use crate::router::{ConnState, ServerState};
 pub struct RunningServer {
     listener: TcpListener,
     local_addr: SocketAddr,
+    tls_acceptor: Option<TlsAcceptor>,
     metrics_listener: Option<TcpListener>,
     metrics_addr: Option<SocketAddr>,
     state: Arc<ServerState>,
     active_expire_interval_ms: u64,
+}
+
+fn load_tls_acceptor(cert_path: &Path, key_path: &Path) -> Result<TlsAcceptor, String> {
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|e| format!("failed to open TLS cert `{}`: {e}", cert_path.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to parse TLS cert `{}`: {e}", cert_path.display()))?;
+    if certs.is_empty() {
+        return Err(format!(
+            "no PEM certificates found in `{}`",
+            cert_path.display()
+        ));
+    }
+    let key = PrivateKeyDer::from_pem_file(key_path)
+        .map_err(|e| format!("failed to load TLS key `{}`: {e}", key_path.display()))?;
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let tls_cfg = RustlsServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("TLS protocol config error: {e}"))?
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| format!("invalid TLS cert/key pair: {e}"))?;
+    Ok(TlsAcceptor::from(Arc::new(tls_cfg)))
 }
 
 impl RunningServer {
@@ -30,6 +59,13 @@ impl RunningServer {
     /// # Errors
     /// Returns an error string if AOF replay or TCP binding fails.
     pub async fn bind(config: &ServerConfig) -> Result<Self, String> {
+        let tls_acceptor = match (&config.tls_cert, &config.tls_key) {
+            (Some(cert), Some(key)) => Some(load_tls_acceptor(cert, key)?),
+            (None, None) => None,
+            _ => {
+                return Err("both tls_cert and tls_key must be configured together".to_string());
+            }
+        };
         let state = Arc::new(ServerState::from_config(config)?);
         let addr_str = format!("{}:{}", config.bind, config.port);
         let listener = TcpListener::bind(&addr_str)
@@ -56,6 +92,7 @@ impl RunningServer {
         Ok(Self {
             listener,
             local_addr,
+            tls_acceptor,
             metrics_listener,
             metrics_addr,
             state,
@@ -113,9 +150,10 @@ impl RunningServer {
             })
         });
 
-        // Spawn main RESP TCP accept loop.
+        // Spawn main RESP TCP (or TLS) accept loop.
         let listener = self.listener;
         let accept_state = Arc::clone(&self.state);
+        let tls_acceptor = self.tls_acceptor;
         let accept_handle = tokio::spawn(async move {
             loop {
                 match listener.accept().await {
@@ -133,8 +171,21 @@ impl RunningServer {
                             .connections_active
                             .fetch_add(1, Ordering::Relaxed);
                         let st = Arc::clone(&accept_state);
+                        let acceptor = tls_acceptor.clone();
                         tokio::spawn(async move {
-                            handle_resp_conn(stream, st, conn_id).await;
+                            match acceptor {
+                                Some(tls) => match tls.accept(stream).await {
+                                    Ok(tls_stream) => {
+                                        handle_resp_conn(tls_stream, st, conn_id).await;
+                                    }
+                                    Err(_) => {
+                                        st.metrics
+                                            .connections_active
+                                            .fetch_sub(1, Ordering::Relaxed);
+                                    }
+                                },
+                                None => handle_resp_conn(stream, st, conn_id).await,
+                            }
                         });
                     }
                     Err(_) => {
@@ -161,7 +212,10 @@ impl RunningServer {
     }
 }
 
-async fn handle_resp_conn(mut stream: TcpStream, state: Arc<ServerState>, conn_id: u64) {
+async fn handle_resp_conn<S>(mut stream: S, state: Arc<ServerState>, conn_id: u64)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let limits = ParseLimits::default();
     let mut conn = ConnState::new(state.requirepass.is_none());
     conn.id = conn_id;
