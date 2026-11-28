@@ -13,7 +13,7 @@ pub mod engine;
 pub mod slab;
 
 pub use engine::{
-    Engine, EngineConfig, EngineError, EvictionPolicy, LexBound, ScanPage, ScoreBound, SetOptions,
-    ZRangeRankOptions,
+    Engine, EngineConfig, EngineError, EngineReader, EvictionPolicy, LexBound, ScanPage,
+    ScoreBound, SetOptions, ZRangeRankOptions,
 };
 pub use slab::KeyType;

@@ -1,11 +1,16 @@
-//! Generational in-memory value slab with exact byte accounting (`docs/PRD.md` §3.5).
+//! Sharded generational in-memory value slab with exact byte accounting (`docs/PRD.md` §3.5).
 //!
 //! Stores variable-length string/field payloads and logical key headers behind
-//! 64-bit generational handles `(generation_u32 << 32) | index_u32` so that
-//! `SyncExpanseOrderedBytesMap` stores only `u64` handles. Zero `unsafe`.
+//! 64-bit generational handles `(shard_u8 << 56) | (generation_u24 << 32) | index_u32`
+//! so that `SyncExpanseOrderedBytesMap` stores only `u64` handles. Sharded into
+//! 64 cache-line-padded `RwLock` shards to eliminate cross-core lock contention.
+//! Zero `unsafe`.
 
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+const NUM_SHARDS: usize = 64;
+const GEN_MASK: u32 = 0x00FF_FFFF;
 
 /// Logical Redis key type stored at `[PREFIX_STRING][key]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,8 +33,6 @@ impl KeyType {
             Self::String => "string",
             Self::Hash => "hash",
             Self::ZSet => "zset",
-            // Redis reports bitmaps as "string" or we expose a distinct type;
-            // PRD §3.2 models large sparse bitmaps as a distinct backing type.
             Self::Bitmap => "string",
         }
     }
@@ -103,9 +106,26 @@ struct SlabInner {
     free_list: Vec<u32>,
 }
 
-/// Thread-safe generational in-memory value slab with atomic live-byte tracking.
-pub struct ValueSlab {
+#[repr(align(64))]
+struct SlabShard {
     inner: RwLock<SlabInner>,
+}
+
+impl SlabShard {
+    fn new() -> Self {
+        Self {
+            inner: RwLock::new(SlabInner {
+                slots: Vec::new(),
+                free_list: Vec::new(),
+            }),
+        }
+    }
+}
+
+/// Thread-safe, 64-shard generational in-memory value slab with atomic live-byte tracking.
+pub struct ValueSlab {
+    shards: Box<[SlabShard]>,
+    next_shard: AtomicUsize,
     live_bytes: AtomicUsize,
 }
 
@@ -116,45 +136,61 @@ impl Default for ValueSlab {
 }
 
 impl ValueSlab {
-    /// Creates an empty value slab.
+    /// Creates an empty 64-shard value slab.
     #[must_use]
     pub fn new() -> Self {
+        let mut shards = Vec::with_capacity(NUM_SHARDS);
+        for _ in 0..NUM_SHARDS {
+            shards.push(SlabShard::new());
+        }
         Self {
-            inner: RwLock::new(SlabInner {
-                slots: Vec::new(),
-                free_list: Vec::new(),
-            }),
+            shards: shards.into_boxed_slice(),
+            next_shard: AtomicUsize::new(0),
             live_bytes: AtomicUsize::new(0),
         }
     }
 
     #[inline]
-    fn pack_handle(generation: u32, idx: u32) -> u64 {
-        (u64::from(generation) << 32) | u64::from(idx)
+    fn pack_handle(shard: usize, generation: u32, idx: u32) -> u64 {
+        ((shard as u64) << 56) | (u64::from(generation & GEN_MASK) << 32) | u64::from(idx)
     }
 
     #[inline]
-    fn unpack_handle(handle: u64) -> (u32, usize) {
-        ((handle >> 32) as u32, (handle & 0xFFFF_FFFF) as usize)
+    fn unpack_handle(handle: u64) -> (usize, u32, usize) {
+        let shard = ((handle >> 56) as usize) & (NUM_SHARDS - 1);
+        let gen_id = ((handle >> 32) as u32) & GEN_MASK;
+        let idx = (handle & 0xFFFF_FFFF) as usize;
+        (shard, gen_id, idx)
+    }
+
+    #[inline]
+    fn next_generation(cur: u32) -> u32 {
+        let next = cur.wrapping_add(1) & GEN_MASK;
+        if next == 0 { 1 } else { next }
     }
 
     /// Inserts `entry` into the slab and returns its 64-bit generational handle.
     pub fn insert(&self, entry: SlotEntry) -> u64 {
         let bytes = entry.payload.byte_size();
-        let mut guard = self.inner.write().expect("value slab lock poisoned");
+        let shard_idx = self.next_shard.fetch_add(1, Ordering::Relaxed) & (NUM_SHARDS - 1);
+        let mut guard = self.shards[shard_idx]
+            .inner
+            .write()
+            .expect("value slab lock poisoned");
         let handle = if let Some(idx) = guard.free_list.pop() {
             let slot = &mut guard.slots[idx as usize];
-            slot.generation = slot.generation.wrapping_add(1).max(1);
+            slot.generation = Self::next_generation(slot.generation);
             slot.entry = Some(entry);
-            Self::pack_handle(slot.generation, idx)
+            Self::pack_handle(shard_idx, slot.generation, idx)
         } else {
             let idx = u32::try_from(guard.slots.len()).expect("slab index fits in u32");
             guard.slots.push(SlabSlot {
                 generation: 1,
                 entry: Some(entry),
             });
-            Self::pack_handle(1, idx)
+            Self::pack_handle(shard_idx, 1, idx)
         };
+        drop(guard);
         self.live_bytes.fetch_add(bytes, Ordering::Relaxed);
         handle
     }
@@ -162,8 +198,11 @@ impl ValueSlab {
     /// Clones the live [`SlotEntry`] for `handle`, or returns `None` if stale/freed.
     #[must_use]
     pub fn get(&self, handle: u64) -> Option<SlotEntry> {
-        let (gen_id, idx) = Self::unpack_handle(handle);
-        let guard = self.inner.read().expect("value slab lock poisoned");
+        let (shard_idx, gen_id, idx) = Self::unpack_handle(handle);
+        let guard = self.shards[shard_idx]
+            .inner
+            .read()
+            .expect("value slab lock poisoned");
         let slot = guard.slots.get(idx)?;
         if slot.generation != gen_id {
             return None;
@@ -173,8 +212,11 @@ impl ValueSlab {
 
     /// Runs `f` with a shared reference to the live [`SlotEntry`], returning `None` if stale.
     pub fn with_entry<R>(&self, handle: u64, f: impl FnOnce(&SlotEntry) -> R) -> Option<R> {
-        let (gen_id, idx) = Self::unpack_handle(handle);
-        let guard = self.inner.read().expect("value slab lock poisoned");
+        let (shard_idx, gen_id, idx) = Self::unpack_handle(handle);
+        let guard = self.shards[shard_idx]
+            .inner
+            .read()
+            .expect("value slab lock poisoned");
         let slot = guard.slots.get(idx)?;
         if slot.generation != gen_id {
             return None;
@@ -184,8 +226,11 @@ impl ValueSlab {
 
     /// Runs `f` with a mutable reference to the live [`SlotEntry`], updating `live_bytes`.
     pub fn update_entry<R>(&self, handle: u64, f: impl FnOnce(&mut SlotEntry) -> R) -> Option<R> {
-        let (gen_id, idx) = Self::unpack_handle(handle);
-        let mut guard = self.inner.write().expect("value slab lock poisoned");
+        let (shard_idx, gen_id, idx) = Self::unpack_handle(handle);
+        let mut guard = self.shards[shard_idx]
+            .inner
+            .write()
+            .expect("value slab lock poisoned");
         let slot = guard.slots.get_mut(idx)?;
         if slot.generation != gen_id {
             return None;
@@ -194,6 +239,7 @@ impl ValueSlab {
         let before = entry.payload.byte_size();
         let res = f(entry);
         let after = entry.payload.byte_size();
+        drop(guard);
         if after >= before {
             self.live_bytes.fetch_add(after - before, Ordering::Relaxed);
         } else {
@@ -204,25 +250,31 @@ impl ValueSlab {
 
     /// Removes and returns the [`SlotEntry`] for `handle`, returning `None` if already freed.
     pub fn remove(&self, handle: u64) -> Option<SlotEntry> {
-        let (gen_id, idx) = Self::unpack_handle(handle);
-        let mut guard = self.inner.write().expect("value slab lock poisoned");
+        let (shard_idx, gen_id, idx) = Self::unpack_handle(handle);
+        let mut guard = self.shards[shard_idx]
+            .inner
+            .write()
+            .expect("value slab lock poisoned");
         let slot = guard.slots.get_mut(idx)?;
         if slot.generation != gen_id {
             return None;
         }
         let old = slot.entry.take()?;
         let bytes = old.payload.byte_size();
-        slot.generation = slot.generation.wrapping_add(1).max(1);
+        slot.generation = Self::next_generation(slot.generation);
         guard.free_list.push(idx as u32);
+        drop(guard);
         self.live_bytes.fetch_sub(bytes, Ordering::Relaxed);
         Some(old)
     }
 
-    /// Removes all entries from the slab and resets live bytes to zero.
+    /// Removes all entries from all shards and resets live bytes to zero.
     pub fn clear(&self) {
-        let mut guard = self.inner.write().expect("value slab lock poisoned");
-        guard.slots.clear();
-        guard.free_list.clear();
+        for shard in &self.shards {
+            let mut guard = shard.inner.write().expect("value slab lock poisoned");
+            guard.slots.clear();
+            guard.free_list.clear();
+        }
         self.live_bytes.store(0, Ordering::Relaxed);
     }
 
