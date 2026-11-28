@@ -55,6 +55,11 @@ The workflow depends on two settings outside the repository's files:
   repository, the workflow `release.yml` and the environment `release`.
 
 Creating a tag is the maintainer's action (`AGENTS.md` §5).
+[`scripts/tag-release.sh X.Y.Z`](../scripts/tag-release.sh) makes the release
+gate's checks before the tag exists: the remote is this repository, the commit
+is on `main`, the tag is new, the workspace version matches, and the rollup
+check concluded `success`. It creates the signed tag and prints the push
+command; it never pushes.
 
 ## Discipline gates
 
